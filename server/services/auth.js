@@ -1,0 +1,133 @@
+import crypto from 'node:crypto';
+import { promisify } from 'node:util';
+import { db } from '../db/index.js';
+import { config } from '../config.js';
+import { nowIso } from '../lib/time.js';
+import { HttpError } from '../lib/validate.js';
+
+const scrypt = promisify(crypto.scrypt);
+const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 64 };
+export const SESSION_COOKIE = 'pm_session';
+
+export async function hashPassword(password) {
+  const salt = crypto.randomBytes(16);
+  const key = await scrypt(password, salt, SCRYPT.keylen, { N: SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p, maxmem: 64 * 1024 * 1024 });
+  return `scrypt$${SCRYPT.N}$${SCRYPT.r}$${SCRYPT.p}$${salt.toString('base64')}$${key.toString('base64')}`;
+}
+
+export async function verifyPassword(password, stored) {
+  const [algo, N, r, p, saltB64, keyB64] = String(stored || '').split('$');
+  if (algo !== 'scrypt') return false;
+  const expected = Buffer.from(keyB64, 'base64');
+  const key = await scrypt(password, Buffer.from(saltB64, 'base64'), expected.length, { N: +N, r: +r, p: +p, maxmem: 64 * 1024 * 1024 });
+  return crypto.timingSafeEqual(key, expected);
+}
+
+export function validatePassword(password) {
+  if (typeof password !== 'string' || password.length < 10) throw new HttpError(400, 'Password must be at least 10 characters long.');
+  if (password.length > 200) throw new HttpError(400, 'Password is too long.');
+}
+
+export function validateUsername(username) {
+  if (!/^[a-zA-Z0-9_.@-]{3,64}$/.test(String(username || ''))) {
+    throw new HttpError(400, 'Username must be 3-64 characters (letters, numbers, . _ @ -).');
+  }
+}
+
+const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
+
+export async function userCount() {
+  return Number((await db.one('SELECT COUNT(*) AS n FROM pm_users')).n);
+}
+
+export async function createUser(username, password, displayName = '') {
+  validateUsername(username);
+  validatePassword(password);
+  const exists = await db.one('SELECT id FROM pm_users WHERE LOWER(username) = LOWER(?)', [username]);
+  if (exists) throw new HttpError(409, 'That username is already taken.');
+  const { rows } = await db.run(
+    'INSERT INTO pm_users (username, display_name, password_hash, created_at) VALUES (?, ?, ?, ?) RETURNING id',
+    [username, displayName || username, await hashPassword(password), nowIso()]
+  );
+  return rows[0].id;
+}
+
+export async function createSession(userId, { ip, userAgent }) {
+  const token = crypto.randomBytes(32).toString('base64url');
+  const now = new Date();
+  const expires = new Date(now.getTime() + config.sessionDays * 86_400_000);
+  await db.run(
+    'INSERT INTO pm_sessions (token_hash, user_id, ip, user_agent, created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [sha256(token), userId, ip, String(userAgent || '').slice(0, 300), now.toISOString(), now.toISOString(), expires.toISOString()]
+  );
+  await db.run('UPDATE pm_users SET last_login_at = ? WHERE id = ?', [now.toISOString(), userId]);
+  return { token, expires };
+}
+
+export async function resolveSession(token) {
+  if (!token || typeof token !== 'string' || token.length > 100) return null;
+  const row = await db.one(
+    `SELECT s.id AS session_id, s.expires_at, s.last_seen_at, u.id, u.username, u.display_name, u.created_at, u.last_login_at
+     FROM pm_sessions s JOIN pm_users u ON u.id = s.user_id WHERE s.token_hash = ?`,
+    [sha256(token)]
+  );
+  if (!row) return null;
+  if (new Date(row.expires_at) < new Date()) {
+    await db.run('DELETE FROM pm_sessions WHERE id = ?', [row.session_id]);
+    return null;
+  }
+  // Touch at most every 5 minutes.
+  if (Date.now() - new Date(row.last_seen_at).getTime() > 5 * 60_000) {
+    await db.run('UPDATE pm_sessions SET last_seen_at = ? WHERE id = ?', [nowIso(), row.session_id]);
+  }
+  return row;
+}
+
+export async function destroySession(token) {
+  if (token) await db.run('DELETE FROM pm_sessions WHERE token_hash = ?', [sha256(String(token))]);
+}
+
+export async function purgeExpiredSessions() {
+  await db.run('DELETE FROM pm_sessions WHERE expires_at < ?', [nowIso()]);
+}
+
+// ---- brute-force protection (in-memory, per IP and per username) ----
+
+const failures = new Map();
+const WINDOW_MS = 15 * 60_000;
+const MAX_FAILURES = 5;
+
+function bucket(key) {
+  const now = Date.now();
+  let b = failures.get(key);
+  if (!b || now - b.first > WINDOW_MS) {
+    b = { first: now, count: 0 };
+    failures.set(key, b);
+  }
+  return b;
+}
+
+export function assertNotLocked(ip, username) {
+  for (const key of [`ip:${ip}`, `user:${String(username).toLowerCase()}`]) {
+    const b = bucket(key);
+    if (b.count >= MAX_FAILURES) {
+      const mins = Math.ceil((WINDOW_MS - (Date.now() - b.first)) / 60_000);
+      throw new HttpError(429, `Too many failed sign-in attempts. Try again in ${mins} minute${mins === 1 ? '' : 's'}.`);
+    }
+  }
+}
+
+export function recordFailure(ip, username) {
+  bucket(`ip:${ip}`).count++;
+  bucket(`user:${String(username).toLowerCase()}`).count++;
+}
+
+export function clearFailures(ip, username) {
+  failures.delete(`ip:${ip}`);
+  failures.delete(`user:${String(username).toLowerCase()}`);
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, b] of failures) if (now - b.first > WINDOW_MS) failures.delete(k);
+}, 60_000).unref();

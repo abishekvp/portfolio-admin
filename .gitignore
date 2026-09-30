@@ -12,12 +12,11 @@
 .output/
 #Extension App-file
 *.app
-#Rapid Application Development File
-rad.json
 #Translation Base-file
 *.g.xlf
 #License-files
 *.bclicense
 *.flf
-#Test results file
-TestResults.xml
+
+/node_modules
+/dist
