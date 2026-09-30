@@ -35,11 +35,11 @@ export const settings = {
 };
 
 export const contacts = [
-  { type: 'email', label: 'Email', value: 'contact@abishek.in', icon: '📧' },
-  { type: 'phone', label: 'Phone', value: '+91 72002 63991', icon: '📱' },
-  { type: 'linkedin', label: 'LinkedIn', value: 'LinkedIn', link: 'https://linkedin.com/in/abishek-v-p', icon: '💼' },
-  { type: 'github', label: 'GitHub', value: 'github.com/abishekvp', link: 'https://github.com/abishekvp', icon: '💻' },
-  { type: 'instagram', label: 'Instagram', value: 'abiraj.vp06', link: 'https://instagram.com/abiraj.vp06', icon: '📷' },
+  { type: 'email', label: 'Email', value: 'contact@abishek.in' },
+  { type: 'phone', label: 'Phone', value: '+91 72002 63991' },
+  { type: 'linkedin', label: 'LinkedIn', value: 'LinkedIn', link: 'https://linkedin.com/in/abishek-v-p' },
+  { type: 'github', label: 'GitHub', value: 'github.com/abishekvp', link: 'https://github.com/abishekvp' },
+  { type: 'instagram', label: 'Instagram', value: 'abiraj.vp06', link: 'https://instagram.com/abiraj.vp06' },
 ];
 
 export const experience = [

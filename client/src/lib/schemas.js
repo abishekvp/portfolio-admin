@@ -15,7 +15,6 @@ export const CONTACT_TYPES = [
   ['youtube', 'YouTube', '▶️'], ['medium', 'Medium', '✍️'], ['dribbble', 'Dribbble', '🏀'], ['behance', 'Behance', '🎨'],
   ['stackoverflow', 'Stack Overflow', '📚'], ['leetcode', 'LeetCode', '🧩'], ['telegram', 'Telegram', '✈️'], ['location', 'Location', '📍'], ['other', 'Other', '🔗'],
 ];
-const contactIcon = (t) => CONTACT_TYPES.find((c) => c[0] === t)?.[2] || '🔗';
 
 export const collections = {
   contacts: {
@@ -31,7 +30,7 @@ export const collections = {
       { name: 'visible', label: 'Visible on portfolio', type: 'toggle' },
     ],
     defaults: { type: 'email', visible: true },
-    primary: (i) => `${i.icon || contactIcon(i.type)} ${i.label}`,
+    primary: (i) => `${i.icon ? i.icon + ' ' : ''}${i.label}`,
     secondary: (i) => [i.value, i.link].filter(Boolean).join(' · '),
   },
   experience: {
