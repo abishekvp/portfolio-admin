@@ -44,7 +44,8 @@ export const config = {
   // Origins allowed to call the public API ('*' = any). Admin routes are always same-origin.
   corsOrigins: list(process.env.CORS_ORIGINS || '*'),
   // Absolute base used for media URLs in the public bundle. Derived from the request when empty.
-  publicUrl: (process.env.PUBLIC_URL || '').replace(/\/+$/, ''),
+  // A bare host ("admin.example.com") is taken as https, otherwise links would be relative.
+  publicUrl: (process.env.PUBLIC_URL || '').trim().replace(/\/+$/, '').replace(/^(?!https?:\/\/)(?=.)/i, 'https://'),
 
   cookieSecure: bool(process.env.COOKIE_SECURE, isProd),
 
