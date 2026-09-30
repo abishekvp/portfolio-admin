@@ -1,9 +1,15 @@
 import crypto from 'node:crypto';
 import { promisify } from 'node:util';
 import { db } from '../db/index.js';
-import { config } from '../config.js';
 import { nowIso } from '../lib/time.js';
 import { HttpError } from '../lib/validate.js';
+import { getSetting } from './settings.js';
+
+/** Session lifetime in days, from Account → Security (1–365). */
+async function sessionDays() {
+  const { session_days } = await getSetting('security');
+  return Math.min(365, Math.max(1, Math.round(Number(session_days)) || 14));
+}
 
 const scrypt = promisify(crypto.scrypt);
 const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 64 };
@@ -55,7 +61,7 @@ export async function createUser(username, password, displayName = '') {
 export async function createSession(userId, { ip, userAgent }) {
   const token = crypto.randomBytes(32).toString('base64url');
   const now = new Date();
-  const expires = new Date(now.getTime() + config.sessionDays * 86_400_000);
+  const expires = new Date(now.getTime() + (await sessionDays()) * 86_400_000);
   await db.run(
     'INSERT INTO pm_sessions (token_hash, user_id, ip, user_agent, created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
     [sha256(token), userId, ip, String(userAgent || '').slice(0, 300), now.toISOString(), now.toISOString(), expires.toISOString()]
@@ -91,43 +97,41 @@ export async function purgeExpiredSessions() {
   await db.run('DELETE FROM pm_sessions WHERE expires_at < ?', [nowIso()]);
 }
 
-// ---- brute-force protection (in-memory, per IP and per username) ----
+// ---- brute-force protection (stored in the database so it holds across serverless instances) ----
 
-const failures = new Map();
 const WINDOW_MS = 15 * 60_000;
 const MAX_FAILURES = 5;
+const failureKeys = (ip, username) => [`ip:${ip}`, `user:${String(username).toLowerCase().slice(0, 64)}`];
 
-function bucket(key) {
-  const now = Date.now();
-  let b = failures.get(key);
-  if (!b || now - b.first > WINDOW_MS) {
-    b = { first: now, count: 0 };
-    failures.set(key, b);
-  }
-  return b;
-}
-
-export function assertNotLocked(ip, username) {
-  for (const key of [`ip:${ip}`, `user:${String(username).toLowerCase()}`]) {
-    const b = bucket(key);
-    if (b.count >= MAX_FAILURES) {
-      const mins = Math.ceil((WINDOW_MS - (Date.now() - b.first)) / 60_000);
+export async function assertNotLocked(ip, username) {
+  const since = new Date(Date.now() - WINDOW_MS).toISOString();
+  for (const key of failureKeys(ip, username)) {
+    const row = await db.one('SELECT count, first_at FROM pm_login_failures WHERE key = ? AND first_at > ?', [key, since]);
+    if (row && Number(row.count) >= MAX_FAILURES) {
+      const mins = Math.max(1, Math.ceil((WINDOW_MS - (Date.now() - new Date(row.first_at).getTime())) / 60_000));
       throw new HttpError(429, `Too many failed sign-in attempts. Try again in ${mins} minute${mins === 1 ? '' : 's'}.`);
     }
   }
 }
 
-export function recordFailure(ip, username) {
-  bucket(`ip:${ip}`).count++;
-  bucket(`user:${String(username).toLowerCase()}`).count++;
+export async function recordFailure(ip, username) {
+  const now = nowIso();
+  const since = new Date(Date.now() - WINDOW_MS).toISOString();
+  for (const key of failureKeys(ip, username)) {
+    await db.run(
+      `INSERT INTO pm_login_failures (key, count, first_at) VALUES (?, 1, ?)
+       ON CONFLICT (key) DO UPDATE SET
+         count = CASE WHEN pm_login_failures.first_at > ? THEN pm_login_failures.count + 1 ELSE 1 END,
+         first_at = CASE WHEN pm_login_failures.first_at > ? THEN pm_login_failures.first_at ELSE excluded.first_at END`,
+      [key, now, since, since]
+    );
+  }
 }
 
-export function clearFailures(ip, username) {
-  failures.delete(`ip:${ip}`);
-  failures.delete(`user:${String(username).toLowerCase()}`);
+export async function clearFailures(ip, username) {
+  await db.run('DELETE FROM pm_login_failures WHERE key IN (?, ?)', failureKeys(ip, username));
 }
 
-setInterval(() => {
-  const now = Date.now();
-  for (const [k, b] of failures) if (now - b.first > WINDOW_MS) failures.delete(k);
-}, 60_000).unref();
+export async function purgeLoginFailures() {
+  await db.run('DELETE FROM pm_login_failures WHERE first_at < ?', [new Date(Date.now() - WINDOW_MS).toISOString()]);
+}

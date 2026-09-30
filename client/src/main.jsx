@@ -1,6 +1,6 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import './styles.css';
 import { AuthProvider, useAuth } from './lib/auth.jsx';
 import { ConfirmProvider, Spinner, ToastProvider } from './components/ui.jsx';
@@ -15,20 +15,11 @@ import Skills from './pages/Skills.jsx';
 import Testimonials from './pages/Testimonials.jsx';
 import Messages from './pages/Messages.jsx';
 import MediaLibrary from './pages/MediaLibrary.jsx';
-import Vault from './pages/Vault.jsx';
+import Notes from './pages/Notes.jsx';
+import CustomContent from './pages/CustomContent.jsx';
 import Limits from './pages/Limits.jsx';
 import { Account, ActivityLog, Backup, Integration, SiteSettings } from './pages/System.jsx';
 import { PageHeader } from './components/ui.jsx';
-
-function ContentPage() {
-  const { key } = useParams();
-  if (!['hero', 'about', 'contact'].includes(key)) return <Navigate to="/" replace />;
-  return (
-    <div className="page page-narrow">
-      <SettingsForm key={key} settingKey={key} />
-    </div>
-  );
-}
 
 function SimplePage({ settingKey, title, description }) {
   return (
@@ -48,10 +39,8 @@ function App() {
       <Route element={<Layout />}>
         <Route index element={<Dashboard />} />
         <Route path="analytics" element={<Analytics />} />
-        <Route path="profile" element={<SimplePage settingKey="profile" title="Profile & resume" description="Identity, contact details, photo and resume used across the portfolio." />} />
-        <Route path="content/:key" element={<ContentPage />} />
-        <Route path="sections" element={<SimplePage settingKey="sections" title="Section headers" description="Titles, badges and visibility of every section on the portfolio." />} />
-        {['experience', 'education', 'projects', 'achievements'].map((r) => (
+        <Route path="profile" element={<SimplePage settingKey="profile" title="Profile" description="Your personal details and about summary. How they look is decided by the portfolio's design." />} />
+        {['contacts', 'experience', 'education', 'projects', 'achievements'].map((r) => (
           <Route key={r} path={r} element={<ResourceManager key={r} resource={r} schema={collections[r]} />} />
         ))}
         <Route path="skills" element={<Skills />} />
@@ -59,7 +48,8 @@ function App() {
         <Route path="messages" element={<Messages />} />
         <Route path="limits" element={<Limits />} />
         <Route path="media" element={<MediaLibrary />} />
-        <Route path="vault" element={<Vault />} />
+        <Route path="notes" element={<Notes />} />
+        <Route path="custom" element={<CustomContent />} />
         <Route path="site" element={<SiteSettings />} />
         <Route path="integration" element={<Integration />} />
         <Route path="backup" element={<Backup />} />

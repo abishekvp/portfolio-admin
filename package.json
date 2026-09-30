@@ -1,7 +1,7 @@
 {
   "name": "portfolio-admin",
   "version": "2.0.0",
-  "description": "Portfolio manager: Node.js (Express) API + React admin served as a single monolithic server.",
+  "description": "Portfolio manager: Express API + React admin. Runs as one Node server, or on Vercel (static admin + one serverless function).",
   "private": true,
   "type": "module",
   "engines": {
@@ -14,7 +14,9 @@
     "seed": "node server/scripts/seed.js",
     "create-admin": "node server/scripts/create-admin.js",
     "import:django": "node server/scripts/import-django.js",
-    "test": "node --test server/test/"
+    "backup": "node server/scripts/backup.js backup",
+    "restore": "node server/scripts/backup.js restore",
+    "test": "node --test \"server/test/*.test.js\""
   },
   "dependencies": {
     "compression": "^1.8.0",

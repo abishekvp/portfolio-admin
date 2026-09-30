@@ -100,7 +100,7 @@ export default function MediaLibrary() {
         }}
         onClick={() => input.current?.click()}
       >
-        <Upload size={18} /> Drop images or PDFs here, or click to browse (max 15 MB each)
+        <Upload size={18} /> Drop images or PDFs here, or click to browse (large photos are resized automatically; max 4 MB after resizing)
       </div>
       <Tabs value={tab} onChange={setTab} tabs={[{ value: 'all', label: 'All' }, { value: 'images', label: 'Images' }, { value: 'documents', label: 'Documents' }, { value: 'unused', label: 'Unused', count: unusedCount }]} />
       {loading && !data ? (

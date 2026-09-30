@@ -4,6 +4,7 @@ import { HttpError, rowToJson, toDbValue, validateInput } from '../lib/validate.
 import { nowIso } from '../lib/time.js';
 import { getMediaMeta, mediaPath } from './media.js';
 import { bumpContentVersion } from './settings.js';
+import { hooks } from './hooks.js';
 
 /**
  * Attach `<field>_url` (relative) for each media field, or `<field>_src` when the spec
@@ -65,7 +66,8 @@ export async function getItem(spec, id) {
 }
 
 export async function createItem(spec, input, { allowReadonly = false, runner = db } = {}) {
-  const values = validateInput(spec, input, { allowReadonly });
+  let values = validateInput(spec, input, { allowReadonly });
+  if (hooks[spec.table]) values = await hooks[spec.table](values, null, new Set(Object.keys(input || {})));
   const cols = Object.keys(values);
   const now = nowIso();
   const { max } = (await runner.one(`SELECT MAX(sort_order) AS max FROM ${spec.table}`)) || {};
@@ -81,7 +83,12 @@ export async function createItem(spec, input, { allowReadonly = false, runner = 
 }
 
 export async function updateItem(spec, id, input) {
-  const values = validateInput(spec, input, { partial: true });
+  let values = validateInput(spec, input, { partial: true });
+  if (hooks[spec.table]) {
+    const current = await getItem(spec, id);
+    const merged = Object.fromEntries(Object.keys(spec.fields).filter((k) => !spec.fields[k].readonly).map((k) => [k, current[k]]));
+    values = await hooks[spec.table]({ ...merged, ...values }, current, new Set(Object.keys(input || {})));
+  }
   const cols = Object.keys(values);
   if (!cols.length) return getItem(spec, id);
   const params = [...cols.map((c) => toDbValue(spec.fields[c], values[c])), nowIso(), Number(id)];

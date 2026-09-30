@@ -1,6 +1,7 @@
 /**
- * Singleton content blocks (profile, hero, about, contact, section headers, SEO) and
- * operational settings, stored as JSON in pm_settings.
+ * Singleton records stored as JSON in pm_settings: the personal profile, skill category
+ * metadata, SEO and operational settings. Template-specific texts live in the
+ * custom_content collection instead.
  *
  * Each template doubles as the shape validator:
  *   ''    -> string          0     -> number        false -> boolean
@@ -12,70 +13,16 @@ import { db } from '../db/index.js';
 import { HttpError, isSafeUrl } from '../lib/validate.js';
 import { nowIso } from '../lib/time.js';
 
-const sectionHeader = { badge: '', title: '', accent: '', subtitle: '', visible: false };
-
 export const SETTINGS = {
   profile: {
     label: 'Profile',
     public: true,
     template: {
-      full_name: '', headline: '', email: '', phone: '', location: '', availability: '',
-      avatar_id: null, resume_id: null, resume_url: '', resume_filename: '',
-      website_url: '', github_url: '', linkedin_url: '', twitter_url: '',
-      custom_links: [{ label: '', url: '' }],
+      full_name: '', headline: '', summary: '', location: '', availability: '',
+      email: '', phone: '',
+      photo_id: null, resume_id: null, resume_url: '', resume_filename: '',
     },
-    defaults: { full_name: 'Your Name', headline: 'Software Engineer', availability: 'Open to opportunities', resume_filename: 'Resume.pdf', custom_links: [] },
-  },
-  hero: {
-    label: 'Hero',
-    public: true,
-    template: {
-      badge: '', name: '', name_accent: '', tagline: '', description: '',
-      highlights: [{ icon: '', value: '', label: '' }],
-      primary_cta_label: '', primary_cta_href: '', resume_label: '', terminal_cta_label: '',
-      portrait_id: null, portrait_tag: '',
-      floating_badges: [{ icon: '', title: '', text: '' }],
-    },
-    defaults: { primary_cta_label: 'View Projects', primary_cta_href: '#projects', resume_label: 'Download CV', terminal_cta_label: 'Launch Terminal CLI', highlights: [], floating_badges: [] },
-  },
-  about: {
-    label: 'About',
-    public: true,
-    template: {
-      expertise_title: '', expertise: [{ title: '', description: '' }],
-      bio_title: '', role_badge: '', paragraphs: [''],
-      highlights: [{ icon: '', title: '', description: '' }],
-    },
-    defaults: { expertise_title: 'Core Expertise', expertise: [], paragraphs: [], highlights: [] },
-  },
-  contact: {
-    label: 'Contact',
-    public: true,
-    template: {
-      intro: '', roles: '', form_heading: '', form_subheading: '',
-      methods: [{ name: '', icon: '', value: '', link: '' }],
-      socials: [{ name: '', link: '' }],
-      footer_text: '',
-    },
-    defaults: { form_heading: 'Send a message', methods: [], socials: [] },
-  },
-  sections: {
-    label: 'Section headers',
-    public: true,
-    template: {
-      about: sectionHeader, achievements: sectionHeader, skills: sectionHeader, projects: sectionHeader,
-      experience: sectionHeader, education: sectionHeader, testimonials: sectionHeader, contact: sectionHeader,
-    },
-    defaults: {
-      about: { badge: '// 02. SYSTEM_SPECIFICATION', title: 'About', accent: 'Me', subtitle: 'Professional Summary', visible: true },
-      achievements: { badge: '// HONORS_AND_CREDENTIALS', title: 'Achievements &', accent: 'Recognition', subtitle: 'Milestones, hackathon triumphs, and academic contributions', visible: true },
-      skills: { badge: '// 03. CAPABILITIES_MATRIX', title: 'Core', accent: 'Competencies', subtitle: 'Technologies I work with', visible: true },
-      projects: { badge: '// 04. ARCHITECTURAL_BUILDS', title: 'Featured', accent: 'Projects', subtitle: 'Some of my recent work', visible: true },
-      experience: { badge: '// 05. CAREER_TRAJECTORY', title: 'Work', accent: 'Experience', subtitle: 'My professional journey', visible: true },
-      education: { badge: '// EDUCATION', title: 'Education', accent: '', subtitle: 'Academic background', visible: false },
-      testimonials: { badge: '// 06. PEER_ENDORSEMENTS', title: 'Testimonials &', accent: 'Feedback', subtitle: 'What colleagues and clients say', visible: true },
-      contact: { badge: '// 07. COMMUNICATION_CHANNELS', title: 'Get In', accent: 'Touch', subtitle: "Let's work together", visible: true },
-    },
+    defaults: { full_name: 'Your Name', headline: 'Software Engineer', resume_filename: 'Resume.pdf' },
   },
   skills_meta: {
     label: 'Skill categories',
@@ -107,6 +54,13 @@ export const SETTINGS = {
       min_message_length: 10,
       blocked_emails: [], blocked_ips: [],
     },
+  },
+  security: {
+    label: 'Security',
+    public: false,
+    template: { session_days: 0 },
+    // SESSION_DAYS env var is only the initial default; the admin UI can change it.
+    defaults: { session_days: Number(process.env.SESSION_DAYS) || 14 },
   },
   analytics: {
     label: 'Analytics',
@@ -165,29 +119,32 @@ function sanitize(template, value, path, errors) {
   return Object.fromEntries(Object.entries(template).map(([k, t]) => [k, sanitize(t, obj[k], path ? `${path}.${k}` : k, errors)]));
 }
 
-const cache = new Map();
+// No long-lived caches: on serverless hosts several instances run at once, so every
+// read goes to the database (one small query).
 
-export async function getSetting(key) {
+function hydrate(key, raw) {
   const def = SETTINGS[key];
-  if (!def) throw new HttpError(404, 'Unknown settings section');
-  if (cache.has(key)) return structuredClone(cache.get(key));
-  const row = await db.one('SELECT value FROM pm_settings WHERE key = ?', [key]);
   let stored = {};
   try {
-    stored = row ? JSON.parse(row.value) : {};
+    stored = raw ? JSON.parse(raw) : {};
   } catch {
     stored = {};
   }
-  const value = merge(merge(blank(def.template), def.defaults), stored);
-  cache.set(key, value);
-  return structuredClone(value);
+  return merge(merge(blank(def.template), def.defaults), stored);
+}
+
+export async function getSetting(key) {
+  if (!SETTINGS[key]) throw new HttpError(404, 'Unknown settings section');
+  const row = await db.one('SELECT value FROM pm_settings WHERE key = ?', [key]);
+  return hydrate(key, row?.value);
 }
 
 export async function getAllSettings({ publicOnly = false } = {}) {
+  const rows = new Map((await db.all('SELECT key, value FROM pm_settings')).map((r) => [r.key, r.value]));
   const out = {};
   for (const key of Object.keys(SETTINGS)) {
     if (publicOnly && !SETTINGS[key].public) continue;
-    out[key] = await getSetting(key);
+    out[key] = hydrate(key, rows.get(key));
   }
   return out;
 }
@@ -207,13 +164,8 @@ export async function setSetting(key, input, { partial = true } = {}) {
      ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
     [key, json, nowIso()]
   );
-  cache.set(key, value);
   if (def.public) await bumpContentVersion();
-  return structuredClone(value);
-}
-
-export function clearSettingsCache() {
-  cache.clear();
+  return value;
 }
 
 /** Media ids referenced from settings (for usage tracking). */
@@ -232,22 +184,19 @@ export async function settingsMediaRefs() {
 }
 
 // ---- content version (drives the public bundle cache / SDK revalidation) ----
-
-let contentVersion = null;
+// Always read from the database so every serverless instance agrees on it.
 
 export async function getContentVersion() {
-  if (contentVersion) return contentVersion;
   const row = await db.one("SELECT value FROM pm_meta WHERE key = 'content_version'");
-  contentVersion = row?.value || (await bumpContentVersion());
-  return contentVersion;
+  return row?.value || bumpContentVersion();
 }
 
 export async function bumpContentVersion() {
-  contentVersion = `${Date.now().toString(36)}${crypto.randomBytes(3).toString('hex')}`;
+  const version = `${Date.now().toString(36)}${crypto.randomBytes(3).toString('hex')}`;
   await db.run(
     `INSERT INTO pm_meta (key, value) VALUES ('content_version', ?)
      ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
-    [contentVersion]
+    [version]
   );
-  return contentVersion;
+  return version;
 }

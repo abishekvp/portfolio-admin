@@ -1,6 +1,9 @@
 /**
- * Monolithic server: JSON API + portfolio SDK + the built React admin (client/dist),
- * all from one Node process on one port.
+ * The application. Two ways to run it:
+ *  - `npm start`: one long-running Node process serving the API, the SDK and the built
+ *    React admin (client/dist) on one port — any VPS, Docker, Render, Railway...
+ *  - Vercel: api/index.js hands every /api/* request to the same Express app as a
+ *    serverless function, and Vercel serves client/dist as static files (see vercel.json).
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -10,18 +13,34 @@ import compression from 'compression';
 import cookieParser from 'cookie-parser';
 import { config, ROOT_DIR } from './config.js';
 import { initDb } from './db/index.js';
-import { errorHandler, notFound } from './lib/http.js';
+import { ah, errorHandler, notFound } from './lib/http.js';
+import { HttpError } from './lib/validate.js';
 import publicRoutes from './routes/public.js';
 import authRoutes, { loadUser } from './routes/auth.js';
 import adminRoutes from './routes/admin.js';
-import { scheduleDailyPurge } from './services/limits.js';
-import { createUser, purgeExpiredSessions, userCount } from './services/auth.js';
+import { purgeExpired, scheduleDailyPurge } from './services/limits.js';
+import { createUser, purgeExpiredSessions, purgeLoginFailures, userCount } from './services/auth.js';
 import { getSetting } from './services/settings.js';
 import { purgeAnalytics } from './services/analytics.js';
 
-export async function createApp() {
-  await initDb();
+async function bootstrapAdmin() {
+  if (config.adminUsername && config.adminPassword && (await userCount()) === 0) {
+    await createUser(config.adminUsername, config.adminPassword);
+    console.log(`[setup] created admin user "${config.adminUsername}" from ADMIN_USERNAME/ADMIN_PASSWORD`);
+  }
+}
 
+/** Daily maintenance: expired submission limits, sessions, login throttles, old analytics. */
+export async function housekeeping() {
+  const result = { limits: await purgeExpired() };
+  await purgeExpiredSessions();
+  await purgeLoginFailures();
+  const { retention_days } = await getSetting('analytics');
+  if (retention_days > 0) result.analytics = await purgeAnalytics(retention_days);
+  return result;
+}
+
+function buildApp() {
   const app = express();
   app.set('trust proxy', config.trustProxy);
   app.disable('x-powered-by');
@@ -44,14 +63,20 @@ export async function createApp() {
   );
   app.use(compression());
   app.use(cookieParser());
-  app.use(loadUser);
 
+  // Vercel Cron (or any scheduler) calls this daily with `Authorization: Bearer $CRON_SECRET`.
+  app.get('/api/cron/daily', ah(async (req, res) => {
+    if (!config.cronSecret || req.get('authorization') !== `Bearer ${config.cronSecret}`) throw new HttpError(401, 'Unauthorized');
+    res.json({ status: 'success', ...(await housekeeping()) });
+  }));
+
+  app.use(loadUser);
   app.use('/api/auth', authRoutes);
   app.use('/api/admin', adminRoutes);
   app.use('/api', publicRoutes);
   app.use('/api', notFound);
 
-  // React admin (built with `npm run build`).
+  // React admin (built with `npm run build`). On Vercel these files are served by the CDN instead.
   const dist = path.join(ROOT_DIR, 'client', 'dist');
   if (fs.existsSync(path.join(dist, 'index.html'))) {
     app.use('/assets', express.static(path.join(dist, 'assets'), { immutable: true, maxAge: '1y', index: false }));
@@ -70,33 +95,32 @@ export async function createApp() {
   return app;
 }
 
-async function bootstrapAdmin() {
-  if (config.adminUsername && config.adminPassword && (await userCount()) === 0) {
-    await createUser(config.adminUsername, config.adminPassword);
-    console.log(`[setup] created admin user "${config.adminUsername}" from ADMIN_USERNAME/ADMIN_PASSWORD`);
-  }
-}
+let appPromise = null;
 
-async function housekeeping() {
-  try {
-    await purgeExpiredSessions();
-    const { retention_days } = await getSetting('analytics');
-    if (retention_days > 0) await purgeAnalytics(retention_days);
-  } catch (err) {
-    console.error('[housekeeping]', err.message);
+/** Initialise the database once per process (or serverless instance) and return the app. */
+export function createApp() {
+  if (!appPromise) {
+    appPromise = (async () => {
+      await initDb();
+      await bootstrapAdmin();
+      return buildApp();
+    })().catch((err) => {
+      appPromise = null; // retry on the next request instead of caching the failure
+      throw err;
+    });
   }
+  return appPromise;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(ROOT_DIR, 'server', 'index.js')) {
   const app = await createApp();
-  await bootstrapAdmin();
   await scheduleDailyPurge();
-  await housekeeping();
-  setInterval(housekeeping, 6 * 3600_000).unref();
+  const runHousekeeping = () => housekeeping().catch((err) => console.error('[housekeeping]', err.message));
+  await runHousekeeping();
+  setInterval(runHousekeeping, 6 * 3600_000).unref();
 
   const server = app.listen(config.port, () => {
     console.log(`Portfolio admin running on http://localhost:${config.port} (${config.env}, db: ${config.databaseUrl ? 'postgres' : 'sqlite'}, tz: ${config.timezone})`);
-    if (!config.vaultKey) console.log('[vault] VAULT_KEY not set — the vault is locked.');
   });
   const shutdown = () => server.close(() => process.exit(0));
   process.on('SIGTERM', shutdown);

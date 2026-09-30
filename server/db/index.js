@@ -42,7 +42,7 @@ async function createPg() {
   else if (config.databaseSsl === 'true') ssl = true;
   else if (config.databaseSsl === 'false') ssl = false;
 
-  const pool = new pg.Pool({ connectionString: config.databaseUrl, ssl, max: 10, idleTimeoutMillis: 30_000 });
+  const pool = new pg.Pool({ connectionString: config.databaseUrl, ssl, max: config.isServerless ? 3 : 10, idleTimeoutMillis: config.isServerless ? 5_000 : 30_000 });
   pool.on('error', (err) => console.error('[db] idle client error', err.message));
 
   const wrap = (runner) => ({
@@ -153,6 +153,9 @@ async function createSqlite() {
 }
 
 export async function initDb() {
+  if (!config.databaseUrl && config.isServerless) {
+    throw new Error('DATABASE_URL is required on serverless hosts (e.g. Vercel Postgres / Neon / Prisma Postgres). SQLite needs a persistent disk.');
+  }
   db = config.databaseUrl ? await createPg() : await createSqlite();
   await migrate(db);
   return db;

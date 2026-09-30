@@ -44,8 +44,11 @@ export function Integration() {
       <Card title="2. Read the data" description="The SDK exposes window.PortfolioManager.">
         <pre className="code">{`// Vue / React / vanilla
 PortfolioManager.onData((data) => {
-  // data.profile, data.hero, data.about, data.experience, data.skill_categories,
-  // data.projects, data.achievements, data.testimonials, data.contact, data.sections, data.seo
+  // Personal content: data.profile (incl. summary, photo_url, resume_url), data.contacts,
+  // data.experience, data.education, data.skill_categories, data.projects, data.achievements,
+  // data.testimonials, data.seo
+  // Template texts from "Custom content", with your own fallbacks:
+  const tagline = data.custom?.hero?.tagline ?? 'My default tagline';
 });
 // or listen for the DOM event (works even if the SDK loads after your app)
 window.addEventListener('portfolio:data', (e) => render(e.detail.data));`}</pre>
@@ -66,6 +69,7 @@ window.addEventListener('portfolio:data', (e) => render(e.detail.data));`}</pre>
 
 export function Backup() {
   const [includeMessages, setIncludeMessages] = useState(true);
+  const [includeMedia, setIncludeMedia] = useState(true);
   const [busy, setBusy] = useState(false);
   const file = useRef(null);
   const toast = useToast();
@@ -97,18 +101,24 @@ export function Backup() {
 
   return (
     <div className="page page-narrow">
-      <PageHeader title="Backup & restore" description="A backup is a single JSON file with all content, settings and media (as base64). Admin accounts and the vault are not included." />
+      <PageHeader title="Backup & restore" description="A backup is a single JSON file with all content, custom content, notes, settings and media (as base64). Admin accounts are not included." />
       <Card title="Download backup">
-        <Toggle checked={includeMessages} onChange={setIncludeMessages} label="Include contact messages" />
+        <div className="stack">
+          <Toggle checked={includeMessages} onChange={setIncludeMessages} label="Include contact messages" />
+          <Toggle checked={includeMedia} onChange={setIncludeMedia} label="Include media files (images, resume)" />
+        </div>
         <div className="form-footer">
-          <a className="btn btn-primary" href={`/api/admin/backup?messages=${includeMessages ? 1 : 0}`}>
+          <a className="btn btn-primary" href={`/api/admin/backup?messages=${includeMessages ? 1 : 0}&media=${includeMedia ? 1 : 0}`}>
             <Download size={16} />
             <span>Download backup</span>
           </a>
         </div>
       </Card>
       <Card title="Restore">
-        <p className="muted">Replaces current content with a backup file created by this admin.</p>
+        <p className="muted">
+          Replaces current content with a backup file created by this admin. On Vercel, uploads are limited to 4.5 MB — for larger
+          backups run <code>npm run restore -- backup.json</code> locally with <code>DATABASE_URL</code> pointing at the production database.
+        </p>
         <input ref={file} type="file" accept="application/json,.json" hidden onChange={(e) => restore(e.target.files?.[0])} />
         <Button icon={Upload} loading={busy} onClick={() => file.current?.click()}>Choose backup file…</Button>
       </Card>
@@ -222,6 +232,7 @@ export function Account() {
           </div>
         </form>
       </Card>
+      <SettingsForm settingKey="security" />
       <Card title="Active sessions" actions={<Button size="sm" icon={LogOut} onClick={revokeOthers}>Sign out others</Button>}>
         {!sessions.data ? (
           <Spinner />

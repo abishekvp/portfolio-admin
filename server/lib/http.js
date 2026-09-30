@@ -18,10 +18,14 @@ export function publicCors(req, res, next) {
     res.set('Access-Control-Allow-Origin', allowAll ? '*' : origin);
     if (!allowAll) res.vary('Origin');
     res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.set('Access-Control-Allow-Headers', 'Content-Type, Accept, X-Requested-With');
+    res.set('Access-Control-Allow-Headers', req.get('access-control-request-headers') || 'Content-Type, Accept, X-Requested-With');
+    res.set('Access-Control-Expose-Headers', 'X-Content-Version, Retry-After, ETag');
     res.set('Access-Control-Max-Age', '86400');
   }
-  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  if (req.method === 'OPTIONS') {
+    res.vary('Access-Control-Request-Headers');
+    return res.sendStatus(204);
+  }
   next();
 }
 

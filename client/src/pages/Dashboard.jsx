@@ -7,8 +7,10 @@ import { BarList, LineChart, StatTile } from '../components/Charts.jsx';
 
 const CHECKLIST = [
   ['profile', 'Name and email on your profile', '/profile'],
-  ['avatar', 'Profile photo uploaded', '/profile'],
+  ['photo', 'Profile photo uploaded', '/profile'],
+  ['summary', 'About summary written', '/profile'],
   ['resume', 'Resume uploaded', '/profile'],
+  ['contacts', 'Contact links added', '/contacts'],
   ['experience', 'At least one experience entry', '/experience'],
   ['projects', 'At least one project', '/projects'],
   ['skills', 'Skills added', '/skills'],
@@ -123,7 +125,7 @@ export default function Dashboard() {
           ['Skills', counts.skills, '/skills'],
           ['Achievements', counts.achievements, '/achievements'],
           ['Testimonials', counts.testimonials, '/testimonials'],
-          ['Media files', counts.media, '/media'],
+          ['Custom fields', counts.custom_content, '/custom'],
         ].map(([label, n, to]) => (
           <Link key={label} to={to} className="count-chip">
             <strong>{n}</strong>

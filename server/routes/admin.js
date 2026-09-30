@@ -1,19 +1,22 @@
 import express from 'express';
 import multer from 'multer';
 import { db } from '../db/index.js';
+import { config } from '../config.js';
+import { customMediaIds } from '../services/hooks.js';
+import { restoreBackup, writeBackup } from '../services/backup.js';
+import { CUSTOM_PRESETS, applyCustomPreset } from '../seed/custom-presets.js';
 import { getResource, mediaFieldNames, resources } from '../resources.js';
 import { ah, baseUrl } from '../lib/http.js';
-import { HttpError } from '../lib/validate.js';
+import { HttpError, rowToJson } from '../lib/validate.js';
 import { nowIso } from '../lib/time.js';
 import { requireAdmin } from './auth.js';
 import {
   bulkUpdate, createItem, deleteItems, getItem, listItems, logActivity, reorderItems, updateItem,
 } from '../services/collections.js';
-import { SETTINGS, bumpContentVersion, clearSettingsCache, getAllSettings, getSetting, setSetting, settingsMediaRefs } from '../services/settings.js';
+import { SETTINGS, bumpContentVersion, getAllSettings, getSetting, setSetting, settingsMediaRefs } from '../services/settings.js';
 import { decodeDataUri, mediaPath, storeMedia } from '../services/media.js';
 import { purgeAnalytics, summary } from '../services/analytics.js';
 import { clearEntries, listToday } from '../services/limits.js';
-import { VAULT_CATEGORIES, deleteVaultItem, getVaultAttachment, getVaultItem, listVault, saveVaultItem, vaultEnabled } from '../services/vault.js';
 
 const router = express.Router();
 router.use(requireAdmin);
@@ -22,8 +25,8 @@ router.use((req, res, next) => {
   next();
 });
 
-const json = express.json({ limit: '25mb' });
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024, files: 1 } });
+const json = express.json({ limit: config.isServerless ? '4.4mb' : '25mb' });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: config.maxUploadBytes, files: 1 } });
 
 // ------------------------------------------------------------------ overview
 
@@ -31,24 +34,25 @@ router.get('/overview', ah(async (req, res) => {
   const n = async (sql, params) => Number((await db.one(sql, params))?.n || 0);
   const counts = {};
   for (const [name, spec] of Object.entries(resources)) counts[name] = await n(`SELECT COUNT(*) AS n FROM ${spec.table}`);
-  const [unread, pending, media, vault, limitsToday] = await Promise.all([
+  const [unread, pending, media, limitsToday] = await Promise.all([
     n('SELECT COUNT(*) AS n FROM pm_messages WHERE is_read = 0 AND is_archived = 0'),
     n("SELECT COUNT(*) AS n FROM pm_testimonials WHERE status = 'pending'"),
     n('SELECT COUNT(*) AS n FROM pm_media'),
-    n('SELECT COUNT(*) AS n FROM pm_vault'),
     n('SELECT COUNT(*) AS n FROM pm_submission_limits WHERE blocked > 0'),
   ]);
   const recentMessages = await db.all('SELECT id, name, email, subject, is_read, created_at FROM pm_messages WHERE is_archived = 0 ORDER BY created_at DESC LIMIT 5');
   const pendingTestimonials = await db.all("SELECT id, name, role, company, content, created_at FROM pm_testimonials WHERE status = 'pending' ORDER BY created_at DESC LIMIT 5");
   const profile = await getSetting('profile');
   res.json({
-    counts: { ...counts, unread_messages: unread, pending_testimonials: pending, media, vault, blocked_today: limitsToday },
+    counts: { ...counts, unread_messages: unread, pending_testimonials: pending, media, blocked_today: limitsToday },
     recent_messages: recentMessages.map((m) => ({ ...m, is_read: Boolean(m.is_read) })),
     pending_testimonials: pendingTestimonials,
     analytics: await summary(Number(req.query.days) || 14),
     checklist: {
       profile: Boolean(profile.full_name && profile.email),
-      avatar: Boolean(profile.avatar_id),
+      photo: Boolean(profile.photo_id),
+      summary: Boolean(profile.summary),
+      contacts: counts.contacts > 0,
       resume: Boolean(profile.resume_id || profile.resume_url),
       projects: counts.projects > 0,
       experience: counts.experience > 0,
@@ -191,6 +195,10 @@ async function mediaUsage() {
     for (const r of rows) for (const fld of fields) add(Number(r[fld]), `${s.label} #${r.id}`);
   }
   for (const ref of await settingsMediaRefs()) add(ref.id, `Settings: ${ref.where}`);
+  for (const r of await db.all('SELECT id, group_key, key, type, value, schema FROM pm_custom_content')) {
+    const row = rowToJson(resources.custom_content, r);
+    for (const id of customMediaIds(row)) add(id, `Custom content ${row.group_key}.${row.key}`);
+  }
   return usage;
 }
 
@@ -217,7 +225,7 @@ router.post('/media', upload.single('file'), json, ah(async (req, res) => {
   let buffer = req.file?.buffer;
   let filename = req.file?.originalname;
   if (!buffer && typeof req.body?.data === 'string') {
-    buffer = decodeDataUri(req.body.data, 15 * 1024 * 1024);
+    buffer = decodeDataUri(req.body.data, config.maxUploadBytes);
     filename = req.body.filename;
   }
   if (!buffer) throw new HttpError(400, 'No file received');
@@ -272,56 +280,6 @@ router.delete('/limits', ah(async (req, res) => {
   res.json({ status: 'success', removed });
 }));
 
-// ------------------------------------------------------------------ vault
-
-router.get('/vault', ah(async (req, res) => {
-  res.json({ enabled: vaultEnabled(), categories: VAULT_CATEGORIES, items: vaultEnabled() ? await listVault(req.query.q) : [] });
-}));
-
-router.get('/vault/:id', ah(async (req, res) => {
-  res.json(await getVaultItem(req.params.id));
-}));
-
-function vaultBody(req) {
-  // multipart sends the JSON payload in a "payload" field alongside the attachment
-  if (typeof req.body?.payload === 'string') {
-    try {
-      return JSON.parse(req.body.payload);
-    } catch {
-      throw new HttpError(400, 'Malformed payload');
-    }
-  }
-  return req.body || {};
-}
-
-router.post('/vault', upload.single('attachment'), json, ah(async (req, res) => {
-  const item = await saveVaultItem(null, vaultBody(req), req.file);
-  await logActivity(req.user, 'create', 'vault', item.id, item.title);
-  res.status(201).json(item);
-}));
-
-router.put('/vault/:id', upload.single('attachment'), json, ah(async (req, res) => {
-  const item = await saveVaultItem(req.params.id, vaultBody(req), req.file);
-  await logActivity(req.user, 'update', 'vault', item.id, item.title);
-  res.json(item);
-}));
-
-router.delete('/vault/:id', ah(async (req, res) => {
-  await deleteVaultItem(req.params.id);
-  await logActivity(req.user, 'delete', 'vault', req.params.id, '');
-  res.json({ status: 'success' });
-}));
-
-router.get('/vault/:id/attachment', ah(async (req, res) => {
-  const file = await getVaultAttachment(req.params.id);
-  res.set({
-    'Content-Type': 'application/octet-stream',
-    'Content-Disposition': `attachment; filename="${file.name.replace(/"/g, '')}"`,
-    'X-Content-Type-Options': 'nosniff',
-  });
-  res.send(file.data);
-}));
-
 // ------------------------------------------------------------------ activity
 
 router.get('/activity', ah(async (req, res) => {
@@ -349,66 +307,32 @@ router.get('/integration', ah(async (req, res) => {
 
 // ------------------------------------------------------------------ backup / restore
 
-const BACKUP_VERSION = 1;
-
 router.get('/backup', ah(async (req, res) => {
-  const includeMessages = req.query.messages !== '0';
-  const out = { format: 'portfolio-admin-backup', version: BACKUP_VERSION, exported_at: nowIso(), settings: {}, collections: {}, media: [] };
-  for (const row of await db.all('SELECT key, value FROM pm_settings')) out.settings[row.key] = JSON.parse(row.value);
-  for (const [name, s] of Object.entries(resources)) {
-    if (name === 'messages' && !includeMessages) continue;
-    out.collections[name] = await db.all(`SELECT * FROM ${s.table} ORDER BY id`);
-  }
-  for (const m of await db.all('SELECT * FROM pm_media ORDER BY id')) {
-    out.media.push({ ...m, data: db.toBuffer(m.data).toString('base64') });
-  }
-  await logActivity(req.user, 'export', 'backup', null, 'Downloaded a full backup');
-  res.set('Content-Disposition', `attachment; filename="portfolio-backup-${nowIso().slice(0, 10)}.json"`);
-  res.json(out);
+  await logActivity(req.user, 'export', 'backup', null, 'Downloaded a backup');
+  res.set({
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Disposition': `attachment; filename="portfolio-backup-${nowIso().slice(0, 10)}.json"`,
+  });
+  await writeBackup((chunk) => res.write(chunk), { includeMessages: req.query.messages !== '0', includeMedia: req.query.media !== '0' });
+  res.end();
 }));
 
-router.post('/backup/restore', express.json({ limit: '250mb' }), ah(async (req, res) => {
-  const backup = req.body;
-  if (backup?.format !== 'portfolio-admin-backup') throw new HttpError(400, 'This is not a portfolio admin backup file.');
-  const stats = { settings: 0, media: 0 };
-  await db.tx(async (t) => {
-    await t.run('DELETE FROM pm_media');
-    for (const m of backup.media || []) {
-      await t.run(
-        `INSERT INTO pm_media (id, filename, mime, size, width, height, sha256, alt, source, data, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [m.id, m.filename, m.mime, m.size, m.width, m.height, m.sha256, m.alt, m.source || 'admin', Buffer.from(m.data, 'base64'), m.created_at]
-      );
-      stats.media++;
-    }
-    for (const [key, value] of Object.entries(backup.settings || {})) {
-      if (!SETTINGS[key]) continue;
-      await t.run(
-        `INSERT INTO pm_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-        [key, JSON.stringify(value), nowIso()]
-      );
-      stats.settings++;
-    }
-    for (const [name, rows] of Object.entries(backup.collections || {})) {
-      const s = resources[name];
-      if (!s || !Array.isArray(rows)) continue;
-      await t.run(`DELETE FROM ${s.table}`);
-      const cols = ['id', ...Object.keys(s.fields), 'sort_order', 'created_at', 'updated_at'];
-      for (const row of rows) {
-        await t.run(`INSERT INTO ${s.table} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`, cols.map((c) => row[c] ?? (c.endsWith('_at') ? nowIso() : null)));
-      }
-      stats[name] = rows.length;
-    }
-  });
-  // Keep Postgres sequences ahead of the restored ids.
-  if (db.dialect === 'pg') {
-    for (const table of ['pm_media', ...Object.values(resources).map((s) => s.table)]) {
-      await db.exec(`SELECT setval(pg_get_serial_sequence('${table}', 'id'), COALESCE((SELECT MAX(id) FROM ${table}), 0) + 1, false)`);
-    }
-  }
-  clearSettingsCache();
-  await bumpContentVersion();
+router.post('/backup/restore', express.json({ limit: config.isServerless ? '4.4mb' : '250mb' }), ah(async (req, res) => {
+  const stats = await restoreBackup(req.body);
   await logActivity(req.user, 'restore', 'backup', null, JSON.stringify(stats));
   res.json({ status: 'success', restored: stats });
+}));
+
+// ------------------------------------------------------------------ custom content presets
+
+router.get('/custom/presets', (req, res) => {
+  res.json({ items: Object.entries(CUSTOM_PRESETS).map(([id, p]) => ({ id, label: p.label, description: p.description, groups: [...new Set(p.entries.map((e) => e.group_key))], count: p.entries.length })) });
+});
+
+router.post('/custom/presets/:id/apply', json, ah(async (req, res) => {
+  const result = await applyCustomPreset(req.params.id, { overwrite: req.body?.overwrite === true });
+  await logActivity(req.user, 'preset', 'custom_content', req.params.id, `Added ${result.added}, updated ${result.updated}`);
+  res.json({ status: 'success', ...result });
 }));
 
 export default router;

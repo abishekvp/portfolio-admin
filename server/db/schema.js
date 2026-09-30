@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { resources } from '../resources.js';
 
 const types = {
@@ -93,17 +94,10 @@ CREATE TABLE IF NOT EXISTS pm_analytics_events (
   created_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS pm_vault (
-  id {{ID}},
-  title TEXT NOT NULL,
-  category TEXT,
-  url TEXT,
-  secret TEXT NOT NULL,
-  attachment {{BLOB}},
-  attachment_name TEXT,
-  attachment_mime TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+CREATE TABLE IF NOT EXISTS pm_login_failures (
+  key TEXT PRIMARY KEY,
+  count INTEGER NOT NULL DEFAULT 0,
+  first_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS pm_activity (
@@ -153,7 +147,27 @@ async function existingColumns(db, table) {
   return new Set(rows.map((r) => r.name));
 }
 
+const EXTRA_INDEXES = [
+  'CREATE INDEX IF NOT EXISTS idx_pm_testimonials_status ON pm_testimonials (status)',
+  'CREATE INDEX IF NOT EXISTS idx_pm_messages_created ON pm_messages (created_at)',
+  'CREATE UNIQUE INDEX IF NOT EXISTS idx_pm_custom_key ON pm_custom_content (group_key, key)',
+];
+
+// Fingerprint of the whole schema: when it matches the stored one, migrations are skipped
+// (keeps serverless cold starts fast).
+const SCHEMA_HASH = crypto
+  .createHash('sha1')
+  .update(CORE_TABLES + JSON.stringify(Object.values(resources).map((s) => [s.table, s.fields])) + EXTRA_INDEXES.join())
+  .digest('hex');
+
 export async function migrate(db) {
+  try {
+    const row = await db.one("SELECT value FROM pm_meta WHERE key = 'schema_hash'");
+    if (row?.value === SCHEMA_HASH) return;
+  } catch {
+    /* first run: pm_meta does not exist yet */
+  }
+
   const t = types[db.dialect];
   const fill = (sql) => sql.replace(/\{\{(\w+)\}\}/g, (_, k) => t[k]);
 
@@ -171,6 +185,9 @@ export async function migrate(db) {
       }
     }
   }
-  await db.exec('CREATE INDEX IF NOT EXISTS idx_pm_testimonials_status ON pm_testimonials (status)');
-  await db.exec('CREATE INDEX IF NOT EXISTS idx_pm_messages_created ON pm_messages (created_at)');
+  for (const sql of EXTRA_INDEXES) await db.exec(sql);
+  await db.run(
+    "INSERT INTO pm_meta (key, value) VALUES ('schema_hash', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+    [SCHEMA_HASH]
+  );
 }

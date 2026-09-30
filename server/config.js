@@ -43,16 +43,21 @@ export const config = {
   publicUrl: (process.env.PUBLIC_URL || '').replace(/\/+$/, ''),
 
   cookieSecure: bool(process.env.COOKIE_SECURE, isProd),
-  sessionDays: Number(process.env.SESSION_DAYS) || 14,
 
   // First-run bootstrap. Either set both, or use the /setup screen (guarded by SETUP_TOKEN in production).
   adminUsername: process.env.ADMIN_USERNAME || '',
   adminPassword: process.env.ADMIN_PASSWORD || '',
   setupToken: process.env.SETUP_TOKEN || '',
 
-  // 32+ byte secret used to encrypt vault entries (AES-256-GCM). The vault is disabled without it.
-  vaultKey: process.env.VAULT_KEY || '',
+  // Serverless (Vercel): no background timers, no writable disk, 4.5 MB request/response cap.
+  isServerless: Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME),
+  // Largest accepted upload. Vercel rejects request bodies above 4.5 MB before they reach the app.
+  maxUploadBytes: Number(process.env.MAX_UPLOAD_BYTES) || (process.env.VERCEL ? 4 * 1024 * 1024 : 15 * 1024 * 1024),
+  // Vercel Cron sends `Authorization: Bearer $CRON_SECRET`.
+  cronSecret: process.env.CRON_SECRET || '',
 
   // Images at or below this size are inlined (base64) in the public bundle so the SDK can keep them in sessionStorage.
   inlineMediaMaxBytes: Number(process.env.INLINE_MEDIA_MAX_BYTES) || 350 * 1024,
+  // Total inline budget per bundle (keeps it under sessionStorage quotas and Vercel's response cap).
+  inlineMediaTotalBytes: Number(process.env.INLINE_MEDIA_TOTAL_BYTES) || 2.5 * 1024 * 1024,
 };

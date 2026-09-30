@@ -59,12 +59,25 @@ function limitMessage(kind) {
     : "You've already submitted a testimonial today. Please try again tomorrow.";
 }
 
+// Serverless instances have no midnight timer; the first submission each instance sees on
+// a new day clears the previous days' entries (Vercel Cron does the same once a day).
+let lastPurgeDay = null;
+async function purgeIfNewDay(day) {
+  if (lastPurgeDay === day) return;
+  lastPurgeDay = day;
+  await purgeExpired().catch((err) => console.error('[limits] purge failed', err.message));
+}
+
 /** Read-only pre-check (used before expensive work such as image processing). */
 export async function checkLimit(kind, identity, settings) {
   const day = dayKey();
+  await purgeIfNewDay(day);
   for (const k of keysFor(identity, settings)) {
     const row = await db.one('SELECT count FROM pm_submission_limits WHERE kind = ? AND key_type = ? AND key_value = ? AND day = ?', [kind, k.key_type, k.key_value, day]);
-    if (row && Number(row.count) >= k.limit) return blocked(kind, k, day);
+    if (row && Number(row.count) >= k.limit) {
+      await recordBlocked(kind, k, day);
+      return blocked(kind, k, day);
+    }
   }
   return { ok: true };
 }
@@ -96,6 +109,7 @@ async function recordBlocked(kind, k, day) {
  */
 export async function consumeAndRun(kind, identity, settings, work) {
   const day = dayKey();
+  await purgeIfNewDay(day);
   const keys = keysFor(identity, settings);
   const OVER = Symbol('over');
   let offending = null;

@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
-  Activity, Award, BarChart3, Briefcase, Code2, Database, FolderKanban, GraduationCap, Image, KeyRound, LayoutDashboard,
-  LayoutTemplate, LogOut, Mail, Menu, MessageSquareQuote, Moon, PanelTop, Plug, Search, Settings2, ShieldAlert, Sun, User, UserRound, X,
+  Activity, Award, BarChart3, Blocks, Briefcase, Code2, Contact, Database, FolderKanban, GraduationCap, Image, LayoutDashboard,
+  LogOut, Mail, Menu, MessageSquareQuote, Moon, Plug, Search, Settings2, ShieldAlert, StickyNote, Sun, UserRound, X,
 } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
@@ -14,29 +14,27 @@ const NAV = [
     { to: '/analytics', label: 'Analytics', icon: BarChart3 },
   ] },
   { group: 'Content', items: [
-    { to: '/profile', label: 'Profile & resume', icon: UserRound },
-    { to: '/content/hero', label: 'Hero', icon: PanelTop },
-    { to: '/content/about', label: 'About', icon: User },
-    { to: '/content/contact', label: 'Contact', icon: Mail },
-    { to: '/sections', label: 'Section headers', icon: LayoutTemplate },
-  ] },
-  { group: 'Collections', items: [
+    { to: '/profile', label: 'Profile', icon: UserRound },
+    { to: '/contacts', label: 'Contacts', icon: Contact },
     { to: '/experience', label: 'Experience', icon: Briefcase },
     { to: '/education', label: 'Education', icon: GraduationCap },
     { to: '/skills', label: 'Skills', icon: Code2 },
     { to: '/projects', label: 'Projects', icon: FolderKanban },
     { to: '/achievements', label: 'Achievements', icon: Award },
-  ] },
-  { group: 'Engagement', items: [
-    { to: '/messages', label: 'Messages', icon: Mail, badge: 'messages' },
     { to: '/testimonials', label: 'Testimonials', icon: MessageSquareQuote, badge: 'testimonials' },
+  ] },
+  { group: 'Customize', items: [
+    { to: '/custom', label: 'Custom content', icon: Blocks },
+  ] },
+  { group: 'Inbox', items: [
+    { to: '/messages', label: 'Messages', icon: Mail, badge: 'messages' },
     { to: '/limits', label: 'Spam & limits', icon: ShieldAlert },
   ] },
   { group: 'Library', items: [
     { to: '/media', label: 'Media', icon: Image },
-    { to: '/vault', label: 'Vault', icon: KeyRound },
+    { to: '/notes', label: 'Notes', icon: StickyNote },
   ] },
-  { group: 'System', items: [
+  { group: 'Settings', items: [
     { to: '/site', label: 'Site & SEO', icon: Search },
     { to: '/integration', label: 'Integration', icon: Plug },
     { to: '/backup', label: 'Backup & restore', icon: Database },

@@ -42,9 +42,32 @@ export const api = {
   del: (url) => request('DELETE', url),
 };
 
-export function uploadMedia(file, { preset = 'default', accept = 'image' } = {}) {
+const MAX_UPLOAD_BYTES = 4 * 1024 * 1024; // Vercel rejects request bodies above 4.5 MB
+
+/**
+ * Large photos are scaled down in the browser before upload (the server re-encodes them to
+ * WebP anyway), so phone photos fit the serverless request limit. GIFs are left untouched.
+ */
+async function shrinkImage(file) {
+  if (!file.type.startsWith('image/') || file.type === 'image/gif' || file.size <= 2.5 * 1024 * 1024) return file;
+  const bitmap = await createImageBitmap(file).catch(() => null);
+  if (!bitmap) return file;
+  const scale = Math.min(1, 2400 / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(bitmap.width * scale);
+  canvas.height = Math.round(bitmap.height * scale);
+  canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9));
+  return blob && blob.size < file.size ? new File([blob], file.name.replace(/\.\w+$/, '.jpg'), { type: 'image/jpeg' }) : file;
+}
+
+export async function uploadMedia(file, { preset = 'default', accept = 'image' } = {}) {
+  const prepared = await shrinkImage(file);
+  if (prepared.size > MAX_UPLOAD_BYTES) {
+    throw new ApiError(413, `${file.name} is ${formatBytes(prepared.size)} — the upload limit is ${formatBytes(MAX_UPLOAD_BYTES)}.`);
+  }
   const fd = new FormData();
-  fd.append('file', file);
+  fd.append('file', prepared);
   return request('POST', `/api/admin/media?preset=${preset}&accept=${accept}`, fd);
 }
 

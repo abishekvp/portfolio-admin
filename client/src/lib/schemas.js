@@ -9,7 +9,31 @@ export const JOB_TYPES = [
   { value: 'contract', label: 'Contract' },
 ];
 
+export const CONTACT_TYPES = [
+  ['email', 'Email', '📧'], ['phone', 'Phone', '📱'], ['whatsapp', 'WhatsApp', '💬'], ['website', 'Website', '🌐'],
+  ['linkedin', 'LinkedIn', '💼'], ['github', 'GitHub', '💻'], ['twitter', 'X / Twitter', '🐦'], ['instagram', 'Instagram', '📷'],
+  ['youtube', 'YouTube', '▶️'], ['medium', 'Medium', '✍️'], ['dribbble', 'Dribbble', '🏀'], ['behance', 'Behance', '🎨'],
+  ['stackoverflow', 'Stack Overflow', '📚'], ['leetcode', 'LeetCode', '🧩'], ['telegram', 'Telegram', '✈️'], ['location', 'Location', '📍'], ['other', 'Other', '🔗'],
+];
+const contactIcon = (t) => CONTACT_TYPES.find((c) => c[0] === t)?.[2] || '🔗';
+
 export const collections = {
+  contacts: {
+    title: 'Contacts',
+    singular: 'contact',
+    description: 'Email, phone and social profiles. Links are generated automatically for email, phone and WhatsApp.',
+    fields: [
+      { name: 'type', label: 'Type', type: 'select', options: CONTACT_TYPES.map(([value, label]) => ({ value, label })) },
+      { name: 'label', label: 'Label', required: true, placeholder: 'LinkedIn' },
+      { name: 'value', label: 'Displayed value', placeholder: 'linkedin.com/in/you or +91 …' },
+      { name: 'link', label: 'Link', type: 'url', placeholder: 'Auto from the value when empty' },
+      { name: 'icon', label: 'Icon (optional)', type: 'icon', placeholder: 'Emoji or icon class' },
+      { name: 'visible', label: 'Visible on portfolio', type: 'toggle' },
+    ],
+    defaults: { type: 'email', visible: true },
+    primary: (i) => `${i.icon || contactIcon(i.type)} ${i.label}`,
+    secondary: (i) => [i.value, i.link].filter(Boolean).join(' · '),
+  },
   experience: {
     title: 'Experience',
     singular: 'position',
@@ -126,120 +150,23 @@ export const testimonialFields = [
   { name: 'admin_notes', label: 'Private notes', type: 'textarea', rows: 2, span: 'full' },
 ];
 
-const header = (title) => ({
-  name: title.key,
-  label: title.label,
-  type: 'group',
-  span: 'full',
-  fields: [
-    { name: 'visible', label: 'Show this section', type: 'toggle', span: 'full' },
-    { name: 'badge', label: 'Badge', placeholder: '// 01. SECTION' },
-    { name: 'subtitle', label: 'Subtitle' },
-    { name: 'title', label: 'Title' },
-    { name: 'accent', label: 'Accent word(s)', help: 'Rendered with the gradient highlight after the title.' },
-  ],
-});
-
 export const settingsForms = {
   profile: {
     title: 'Profile',
-    description: 'Identity, contact details, avatar and resume used across the portfolio.',
+    description: 'Your personal details. The portfolio decides how to present them.',
     fields: [
-      { name: 'avatar_id', label: 'Profile photo', type: 'media', preset: 'avatar', span: 'full', help: 'Also used as the hero portrait unless one is set on the Hero page.' },
+      { name: 'photo_id', label: 'Photo', type: 'media', preset: 'avatar', span: 'full' },
       { name: 'full_name', label: 'Full name' },
-      { name: 'headline', label: 'Headline' },
-      { name: 'email', label: 'Public email', type: 'email' },
-      { name: 'phone', label: 'Phone' },
+      { name: 'headline', label: 'Headline / current role' },
+      { name: 'summary', label: 'About summary', type: 'textarea', rows: 8, span: 'full', help: 'Leave a blank line between paragraphs.' },
       { name: 'location', label: 'Location' },
-      { name: 'availability', label: 'Availability status' },
+      { name: 'availability', label: 'Availability', placeholder: 'Open to opportunities' },
+      { name: 'email', label: 'Primary email', type: 'email' },
+      { name: 'phone', label: 'Primary phone' },
       { name: 'resume_id', label: 'Resume (PDF)', type: 'media', accept: 'document', span: 'full', help: 'Served at /api/resume — a stable link that always points to the latest upload.' },
       { name: 'resume_filename', label: 'Download file name', placeholder: 'Resume.pdf' },
       { name: 'resume_url', label: 'External resume URL', type: 'url', help: 'Used only when no PDF is uploaded.' },
-      { name: 'website_url', label: 'Website', type: 'url' },
-      { name: 'github_url', label: 'GitHub', type: 'url' },
-      { name: 'linkedin_url', label: 'LinkedIn', type: 'url' },
-      { name: 'twitter_url', label: 'X / Twitter', type: 'url' },
-      {
-        name: 'custom_links', label: 'Other links', type: 'repeater', span: 'full', addLabel: 'Add link', itemLabel: (i) => i.label,
-        fields: [{ name: 'label', label: 'Label' }, { name: 'url', label: 'URL', type: 'url' }],
-      },
     ],
-  },
-  hero: {
-    title: 'Hero',
-    description: 'The first screen visitors see.',
-    fields: [
-      { name: 'badge', label: 'Status badge', span: 'full' },
-      { name: 'name', label: 'Name' },
-      { name: 'name_accent', label: 'Name accent', help: 'Highlighted part of the name' },
-      { name: 'tagline', label: 'Tagline', span: 'full' },
-      { name: 'description', label: 'Description', type: 'textarea', span: 'full' },
-      {
-        name: 'highlights', label: 'Highlight cards', type: 'repeater', span: 'full', addLabel: 'Add highlight', itemLabel: (i) => i.value,
-        fields: [{ name: 'icon', label: 'Icon', type: 'icon' }, { name: 'value', label: 'Value' }, { name: 'label', label: 'Label', span: 'full' }],
-      },
-      { name: 'primary_cta_label', label: 'Primary button label' },
-      { name: 'primary_cta_href', label: 'Primary button link', placeholder: '#projects' },
-      { name: 'resume_label', label: 'Resume button label' },
-      { name: 'terminal_cta_label', label: 'Terminal button label' },
-      { name: 'portrait_id', label: 'Portrait', type: 'media', preset: 'avatar', span: 'full', help: 'Leave empty to use the profile photo.' },
-      { name: 'portrait_tag', label: 'Portrait caption', span: 'full' },
-      {
-        name: 'floating_badges', label: 'Floating badges', type: 'repeater', span: 'full', addLabel: 'Add badge', itemLabel: (i) => i.title,
-        fields: [{ name: 'icon', label: 'Icon', type: 'icon' }, { name: 'title', label: 'Title' }, { name: 'text', label: 'Text', span: 'full' }],
-      },
-    ],
-  },
-  about: {
-    title: 'About',
-    description: 'Bio, core expertise and highlight cards.',
-    fields: [
-      { name: 'bio_title', label: 'Bio heading' },
-      { name: 'role_badge', label: 'Role badge' },
-      { name: 'paragraphs', label: 'Bio paragraphs', type: 'lines', span: 'full', addLabel: 'Add paragraph' },
-      { name: 'expertise_title', label: 'Expertise heading', span: 'full' },
-      {
-        name: 'expertise', label: 'Expertise items', type: 'repeater', span: 'full', addLabel: 'Add expertise', itemLabel: (i) => i.title,
-        fields: [{ name: 'title', label: 'Title', span: 'full' }, { name: 'description', label: 'Description', type: 'textarea', rows: 2, span: 'full' }],
-      },
-      {
-        name: 'highlights', label: 'Highlight cards', type: 'repeater', span: 'full', addLabel: 'Add highlight', itemLabel: (i) => i.title,
-        fields: [{ name: 'icon', label: 'Icon', type: 'icon' }, { name: 'title', label: 'Title' }, { name: 'description', label: 'Description', span: 'full' }],
-      },
-    ],
-  },
-  contact: {
-    title: 'Contact',
-    description: 'Contact section copy, contact methods and social links.',
-    fields: [
-      { name: 'intro', label: 'Intro', type: 'textarea', rows: 2, span: 'full' },
-      { name: 'roles', label: 'Roles you are open to', type: 'textarea', rows: 2, span: 'full' },
-      { name: 'form_heading', label: 'Form heading' },
-      { name: 'form_subheading', label: 'Form sub-heading' },
-      {
-        name: 'methods', label: 'Contact methods', type: 'repeater', span: 'full', addLabel: 'Add method', itemLabel: (i) => i.name,
-        fields: [{ name: 'icon', label: 'Icon', type: 'icon' }, { name: 'name', label: 'Name' }, { name: 'value', label: 'Displayed value' }, { name: 'link', label: 'Link', placeholder: 'mailto:, tel: or https://' }],
-      },
-      {
-        name: 'socials', label: 'Social links', type: 'repeater', span: 'full', addLabel: 'Add social', itemLabel: (i) => i.name,
-        fields: [{ name: 'name', label: 'Name' }, { name: 'link', label: 'URL', type: 'url' }],
-      },
-      { name: 'footer_text', label: 'Footer text', span: 'full' },
-    ],
-  },
-  sections: {
-    title: 'Section headers',
-    description: 'Titles, badges and visibility for each portfolio section.',
-    fields: [
-      { key: 'about', label: 'About' },
-      { key: 'achievements', label: 'Achievements' },
-      { key: 'skills', label: 'Skills' },
-      { key: 'projects', label: 'Projects' },
-      { key: 'experience', label: 'Experience' },
-      { key: 'education', label: 'Education' },
-      { key: 'testimonials', label: 'Testimonials' },
-      { key: 'contact', label: 'Contact' },
-    ].map(header),
   },
   seo: {
     title: 'Search & sharing',
@@ -250,6 +177,13 @@ export const settingsForms = {
       { name: 'author', label: 'Author' },
       { name: 'theme_color', label: 'Theme color', placeholder: '#0b1020' },
       { name: 'og_image_id', label: 'Social share image', type: 'media', span: 'full', help: '1200×630 recommended.' },
+    ],
+  },
+  security: {
+    title: 'Security',
+    description: 'How long a sign-in lasts before you need to log in again.',
+    fields: [
+      { name: 'session_days', label: 'Stay signed in for (days)', type: 'number', min: 1, max: 365, help: '1–365 days. Applies to new sign-ins; existing sessions keep their expiry (use “Sign out others” to end them).' },
     ],
   },
   analytics: {

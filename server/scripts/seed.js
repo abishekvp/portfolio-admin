@@ -13,6 +13,7 @@ import { createItem } from '../services/collections.js';
 import { getSetting, setSetting } from '../services/settings.js';
 import { storeMedia } from '../services/media.js';
 import * as content from '../seed/content.js';
+import { applyCustomPreset } from '../seed/custom-presets.js';
 
 const args = Object.fromEntries(
   process.argv.slice(2).map((a) => {
@@ -29,7 +30,7 @@ async function isEmpty(table) {
   return Number((await db.one(`SELECT COUNT(*) AS n FROM ${table}`)).n) === 0;
 }
 
-for (const name of ['experience', 'skills', 'projects', 'achievements']) {
+for (const name of ['contacts', 'experience', 'skills', 'projects', 'achievements']) {
   const spec = resources[name];
   if (force) await db.run(`DELETE FROM ${spec.table}`);
   if (!(await isEmpty(spec.table))) {
@@ -57,11 +58,11 @@ async function importFile(filePath, opts) {
 }
 
 const profile = await getSetting('profile');
-if (!profile.avatar_id || force) {
+if (!profile.photo_id || force) {
   const id = await importFile(args.avatar || path.join(siteDir, 'src', 'assets', 'img', 'abi.jpg'), { accept: 'image', preset: 'avatar', alt: profile.full_name });
   if (id) {
-    await setSetting('profile', { avatar_id: id });
-    console.log(`✓ avatar imported (media #${id})`);
+    await setSetting('profile', { photo_id: id });
+    console.log(`✓ photo imported (media #${id})`);
   }
 }
 if (!profile.resume_id || force) {
@@ -71,6 +72,9 @@ if (!profile.resume_id || force) {
     console.log(`✓ resume imported (media #${id})`);
   }
 }
+
+const preset = await applyCustomPreset('abishek-portfolio', { overwrite: force });
+console.log(`✓ custom content preset: ${preset.added} added, ${preset.updated} updated`);
 
 console.log('Seed complete.');
 await db.close();

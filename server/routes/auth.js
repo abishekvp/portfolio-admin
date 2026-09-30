@@ -81,15 +81,15 @@ router.post('/login', ah(async (req, res) => {
   const password = String(req.body?.password || '');
   const ip = clientIp(req);
   if (!username || !password) throw new HttpError(400, 'Username and password are required.');
-  assertNotLocked(ip, username);
+  await assertNotLocked(ip, username);
 
   const user = await db.one('SELECT id, username, password_hash FROM pm_users WHERE LOWER(username) = LOWER(?)', [username]);
   const ok = user ? await verifyPassword(password, user.password_hash) : await verifyPassword(password, await hashPassword('timing-dummy'));
   if (!user || !ok) {
-    recordFailure(ip, username);
+    await recordFailure(ip, username);
     throw new HttpError(401, 'Invalid username or password.');
   }
-  clearFailures(ip, username);
+  await clearFailures(ip, username);
   const session = await createSession(user.id, { ip, userAgent: req.get('user-agent') });
   res.cookie(SESSION_COOKIE, session.token, cookieOptions(session.expires));
   await logActivity(user, 'login', 'user', user.id, `Signed in from ${ip}`);

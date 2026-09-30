@@ -22,6 +22,15 @@ const f = {
 
 export const JOB_TYPES = ['full_time', 'part_time', 'internship', 'freelance', 'contract'];
 
+export const CONTACT_TYPES = [
+  'email', 'phone', 'whatsapp', 'website', 'linkedin', 'github', 'twitter', 'instagram',
+  'youtube', 'medium', 'dribbble', 'behance', 'stackoverflow', 'leetcode', 'telegram', 'location', 'other',
+];
+
+// Custom content value types. `items` = a list of objects whose fields are described by `schema`.
+export const CUSTOM_TYPES = ['text', 'textarea', 'number', 'boolean', 'url', 'image', 'list', 'items', 'json'];
+export const CUSTOM_FIELD_TYPES = ['text', 'textarea', 'url', 'image', 'number', 'boolean'];
+
 export const resources = {
   experience: {
     table: 'pm_experience',
@@ -163,6 +172,57 @@ export const resources = {
     filters: ['is_read', 'is_starred', 'is_archived'],
     orderBy: 'created_at DESC, id DESC',
     paginate: true,
+    affectsPublic: false,
+  },
+
+  contacts: {
+    table: 'pm_contacts',
+    label: 'Contacts',
+    fields: {
+      type: f.enumOf(CONTACT_TYPES),
+      label: f.string(100, { required: true }),
+      value: f.string(255),
+      link: f.url(),
+      icon: f.string(64),
+      visible: f.bool(true),
+    },
+    search: ['label', 'value', 'type'],
+    orderBy: 'sort_order ASC, id ASC',
+  },
+
+  // Template-specific values the site may read (hero badge, taglines, highlight cards, ...).
+  // `value` is validated against `type` (and `schema` for item lists) in services/hooks.js.
+  custom_content: {
+    table: 'pm_custom_content',
+    label: 'Custom content',
+    fields: {
+      group_key: f.string(60, { required: true }),
+      key: f.string(60), // derived from the label when empty (services/hooks.js)
+      label: f.string(150),
+      type: f.enumOf(CUSTOM_TYPES),
+      value: { type: 'json', default: null },
+      schema: { type: 'json', default: [] },
+      help: f.text(500),
+      visible: f.bool(true),
+    },
+    search: ['group_key', 'key', 'label'],
+    filters: ['group_key'],
+    orderBy: 'group_key ASC, sort_order ASC, id ASC',
+  },
+
+  // Private notes (never exposed to the portfolio).
+  notes: {
+    table: 'pm_notes',
+    label: 'Notes',
+    fields: {
+      title: f.string(200, { required: true }),
+      body: f.text(50000),
+      tags: f.list({ itemMax: 40, maxItems: 20 }),
+      color: f.enumOf(['default', 'yellow', 'green', 'blue', 'purple', 'red']),
+      is_pinned: f.bool(false),
+    },
+    search: ['title', 'body'],
+    orderBy: 'is_pinned DESC, updated_at DESC, id DESC',
     affectsPublic: false,
   },
 };
