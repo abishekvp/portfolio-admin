@@ -38,7 +38,7 @@ export function Integration() {
       <Card title="1. Add the SDK to your portfolio" description="Paste into the <head> of the portfolio's index.html. It loads all content (including images) into sessionStorage, tracks visits and wires up the contact & testimonial forms.">
         <CopyBlock value={data.snippet} />
         <p className="muted small">
-          Optional attributes: <code>data-cache-ttl="300"</code> (seconds before revalidating), <code>data-track="false"</code>, <code>data-inline-images="false"</code>, <code>data-seo="false"</code>.
+          Optional attributes: <code>data-cache-ttl="0"</code> (seconds to trust the cache before checking for changes; default 0 = every page load), <code>data-track="false"</code>, <code>data-inline-images="false"</code>, <code>data-seo="false"</code>.
         </p>
       </Card>
       <Card title="2. Read the data" description="The SDK exposes window.PortfolioManager.">

@@ -256,7 +256,8 @@ const SDK_PATH = path.join(ROOT_DIR, 'server', 'sdk', 'portfolio_manager.js');
 router.get(['/portfolio_manager.js', '/embed.js', '/tracker.js', '/summary.js', '/sdk.js'], (req, res, next) => {
   fs.readFile(SDK_PATH, 'utf8', (err, js) => {
     if (err) return next(err);
-    res.set({ 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'public, max-age=300' }).send(js);
+    // Short browser cache so SDK fixes reach visitors quickly; stale copies are refreshed in the background.
+    res.set({ 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'public, max-age=60, stale-while-revalidate=600' }).send(js);
   });
 });
 

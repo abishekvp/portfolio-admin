@@ -4,8 +4,9 @@
  *   <script src="https://admin.example.com/api/portfolio_manager.js" async></script>
  *
  * - Loads ALL portfolio content from the admin API in one request, including images
- *   (as base64 data URIs), and keeps it in sessionStorage. Repeat page loads in the same
- *   tab session render instantly from the cache; the cache is revalidated in the background.
+ *   (as base64 data URIs), and keeps it in sessionStorage. Every page load renders instantly
+ *   from that cache AND asks the server whether the content changed (a few-byte
+ *   "not_modified" reply when it didn't), so admin edits show up on the next normal refresh.
  * - Tracks page views, time on page and resume downloads (silently, never blocks the page).
  * - Handles contact forms  <form data-abishek-contact>  and testimonial forms
  *   <form data-abishek-testimonial>  (photos are downscaled and sent as a base64 string).
@@ -22,7 +23,9 @@
  *   .trackEvent(type, data), .trackResumeDownload(fileName)
  * Events: window 'portfolio:data' (detail: {data, version, source}), 'portfolio:error'.
  *
- * Script attributes: data-api="https://admin.example.com"  data-cache-ttl="300" (seconds)
+ * Script attributes: data-api="https://admin.example.com"
+ *                    data-cache-ttl="0" (seconds to trust the cache without asking the server;
+ *                    default 0 = check on every page load)
  *                    data-track="false" (disable analytics)  data-inline-images="false"
  */
 (function () {
@@ -50,7 +53,8 @@
   };
   var CACHE_KEY = 'pm_portfolio_cache_v2';
   var SID_KEY = 'pm_sid';
-  var TTL_MS = (Number(attr('data-cache-ttl')) || 300) * 1000;
+  // Default 0: revalidate on every page load so admin edits appear on a normal refresh.
+  var TTL_MS = Math.max(0, Number(attr('data-cache-ttl')) || 0) * 1000;
   var TRACK = attr('data-track') !== 'false';
   var INLINE = attr('data-inline-images') !== 'false';
 
