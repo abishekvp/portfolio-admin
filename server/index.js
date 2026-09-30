@@ -24,9 +24,13 @@ import { getSetting } from './services/settings.js';
 import { purgeAnalytics } from './services/analytics.js';
 
 async function bootstrapAdmin() {
-  if (config.adminUsername && config.adminPassword && (await userCount()) === 0) {
+  if (!config.adminUsername || !config.adminPassword || (await userCount()) > 0) return;
+  try {
     await createUser(config.adminUsername, config.adminPassword);
     console.log(`[setup] created admin user "${config.adminUsername}" from ADMIN_USERNAME/ADMIN_PASSWORD`);
+  } catch (err) {
+    // e.g. password shorter than 10 characters — keep serving so the setup screen can explain.
+    console.error(`[setup] could not create admin from ADMIN_USERNAME/ADMIN_PASSWORD: ${err.message}`);
   }
 }
 
