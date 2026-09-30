@@ -1,6 +1,16 @@
 # Portfolio Admin (Node.js + React)
 
-A portfolio content manager with an Express API, a React admin (built with Vite) and an embeddable SDK. It runs on **Vercel** (the static admin plus one serverless function on the same domain) or as **one long-running Node server** (`npm start`).
+A multi-account portfolio backend: anyone can **create an account**, manage their portfolio content in the React admin, and connect any website with their **API key**. It has an Express API, the admin (built with Vite) and an embeddable SDK. It runs on **Vercel** (the static admin plus one serverless function on the same domain) or as **one long-running Node server** (`npm start`).
+
+## Accounts and API keys
+
+- **Sign up** on the admin's start screen (username, optional email, password). Each account has its own profile, collections, custom content, notes, media, messages, analytics, limits and backups, and never sees another account's data.
+- **API keys** (`pk_…`) are created with the account and managed under *API keys & integration*: create one per site, rotate, revoke, see when each was last used. A key is *publishable*. It goes into your website and only reads public content or submits the visitor forms; it never grants admin access.
+- Public endpoints take the key as `?key=pk_…`, an `X-Portfolio-Key: pk_…` header, or `Authorization: Bearer pk_…`. The SDK takes `data-key="pk_…"`.
+- **No key?** The request is served from the default site (`DEFAULT_SITE`, by default the oldest account). This keeps sites embedded before API keys existed working. Set `DEFAULT_SITE=none` to require a key.
+- The **first account** is the platform admin. Platform admins get an *Accounts* page to disable, enable, promote or delete accounts. Accounts can delete themselves under *Account*.
+- Each account's media storage is capped by `ACCOUNT_STORAGE_MB` (platform admins are not capped). Media URLs contain a hash (`/api/media/<id>/<hash>/<name>`) so files cannot be enumerated.
+- **Upgrading a single-user database:** on first start, all existing content, settings, media, analytics and limits are given to the oldest account. That account becomes the platform admin and gets an API key. The migration runs once, in a single locked transaction.
 
 ```
 portfolio-admin/
@@ -31,11 +41,12 @@ The design stays in the portfolio's code. The admin only provides data, plus wha
 ```bash
 npm install
 cp .env.example .env     # no DATABASE_URL → local SQLite file in ./data
-npm run seed             # imports the current abishek.in content, photo, resume and theme preset
+npm run create-admin -- <username> <password>   # first account (platform admin)
+npm run seed             # imports the current abishek.in content, photo, resume and theme preset into it
 npm run dev              # API on :4000 + Vite admin on :5173
 ```
 
-Other modes: `npm run build && npm start` (single server on :4000), or `npm test`.
+Other modes: `npm run build && npm start` (single server on :4000), or `npm test`. To run the tests on Postgres, point `TEST_DATABASE_URL` at an empty throwaway database.
 
 ## Deploying on Vercel
 
@@ -49,13 +60,16 @@ Other modes: `npm run build && npm start` (single server on :4000), or `npm test
    | Variable | Value |
    |---|---|
    | `DATABASE_URL` | Postgres connection string (add `?sslmode=require` if your provider needs it) |
-   | `ADMIN_USERNAME`, `ADMIN_PASSWORD` | First admin, created on first request when no users exist (or use `SETUP_TOKEN` + the setup screen) |
+   | `ADMIN_USERNAME`, `ADMIN_PASSWORD` | First (platform admin) account, created on first request when no accounts exist (or use `SETUP_TOKEN` + the sign-up screen) |
+   | `SIGNUP_ENABLED` | Default `true`: anyone can create an account. `false` closes sign-ups (the first account can always be created) |
+   | `DEFAULT_SITE` | Whose portfolio keyless requests get. Empty = oldest account; a username; or `none` to require an API key |
+   | `ACCOUNT_STORAGE_MB` | Media storage per account (default 50, `0` = unlimited; platform admins are not capped) |
    | `CRON_SECRET` | Long random string; Vercel Cron sends it automatically |
    | `APP_TIMEZONE` | Day boundary for the once-a-day limits (default `Asia/Kolkata`) |
    | `CORS_ORIGINS` | Default `*`: any website, on any domain, can use the public API |
 
 4. **Custom domain:** add `admin.abishek.in` in Vercel. Then set `VITE_ADMIN_URL` in the portfolio (`abishek/.env.production`) to that URL.
-5. **Seed production (optional):** run locally with `DATABASE_URL=<prod url> npm run seed`. To import the old Django data: `DJANGO_DATABASE_URL=… DATABASE_URL=<prod url> npm run import:django`.
+5. **Seed production (optional):** run locally with `DATABASE_URL=<prod url> npm run seed -- --user=<username>`. To import the old Django data: `DJANGO_DATABASE_URL=… DATABASE_URL=<prod url> npm run import:django -- --user=<username>`. CLI scripts (`seed`, `backup`, `restore`, `import:django`) work on one account: `--user=<username>`, default the oldest.
 
 **Serverless-specific behaviour:**
 - **No caches that can go stale.** Settings and the content version are read from the database on each request. The public bundle is cached per content version, so a warm instance never serves outdated content.
@@ -67,7 +81,13 @@ Other modes: `npm run build && npm start` (single server on :4000), or `npm test
 ## How a portfolio site uses it
 
 ```html
-<script src="https://admin.abishek.in/api/portfolio_manager.js" async></script>
+<script src="https://admin.abishek.in/api/portfolio_manager.js" data-key="pk_your_key" async></script>
+```
+
+Or without the SDK, one request returns the whole portfolio as JSON:
+
+```bash
+curl -H "X-Portfolio-Key: pk_your_key" https://admin.abishek.in/api/portfolio
 ```
 
 The SDK loads `/api/portfolio?inline=1`: one bundle with profile, contacts, all collections, approved testimonials, `custom`, and SEO. Small images come as base64. It keeps everything, images included, in **sessionStorage**:
@@ -89,16 +109,22 @@ Contact messages and testimonials are each limited per day, **per email and per 
 
 ## API summary
 
+Public endpoints (everything except `/api/auth`, `/api/admin`, `/api/platform`, media and the SDK) are served for the account of the API key.
+
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/portfolio?inline=1&since=<v>` | Public bundle |
+| GET | `/api/portfolio?key=<key>&inline=1&since=<v>` | Public bundle |
+| GET | `/api/portfolio/version` | Current content version only |
 | POST | `/api/messages/send` | Contact message |
 | POST | `/api/testimonials/submit` | Testimonial (JSON with base64 `photo`, or multipart) |
 | POST | `/api/analytics/collect` | Analytics event (`text/plain` JSON, beacon-friendly) |
-| GET | `/api/media/:id/:name` | Binary media (immutable cache) |
+| GET | `/api/media/:id/:hash/:name` | Binary media (immutable cache) |
 | GET | `/api/resume` | Latest resume PDF |
 | GET | `/api/portfolio_manager.js` | SDK |
 | GET | `/api/cron/daily` | Maintenance (Bearer `CRON_SECRET`) |
-| * | `/api/auth/*`, `/api/admin/*` | Admin API (session cookie + `X-Requested-With: portfolio-admin`) |
+| POST | `/api/auth/signup`, `/api/auth/login` | Create an account / sign in (username or email) |
+| * | `/api/auth/*`, `/api/admin/*` | Account API for the signed-in account (session cookie + `X-Requested-With: portfolio-admin`) |
+| * | `/api/admin/keys` | List, create (`POST`), rename (`PATCH`), rotate (`POST /:id/roll`) and revoke (`DELETE`) API keys |
+| * | `/api/platform/accounts` | Platform admins: list, disable/enable, promote and delete accounts |
 
 Session length is managed in **Account → Security** (1–365 days, default 14).

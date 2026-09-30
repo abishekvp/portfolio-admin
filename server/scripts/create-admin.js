@@ -1,5 +1,5 @@
 /**
- * Create an admin user or reset a password from the command line.
+ * Create a platform admin account, or reset an account's password, from the command line.
  *   npm run create-admin -- <username> <password>
  */
 import { initDb, db } from '../db/index.js';
@@ -20,8 +20,8 @@ try {
     await db.run('DELETE FROM pm_sessions WHERE user_id = ?', [existing.id]);
     console.log(`Password reset for "${username}" (all sessions signed out).`);
   } else {
-    await createUser(username, password);
-    console.log(`Admin user "${username}" created.`);
+    await createUser(username, password, '', { isAdmin: true });
+    console.log(`Platform admin "${username}" created.`);
   }
 } catch (err) {
   console.error(err.message);

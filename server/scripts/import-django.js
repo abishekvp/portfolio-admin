@@ -1,7 +1,7 @@
 /**
  * Import content from the previous Django admin (admin-abishek) database.
  *
- *   DJANGO_DATABASE_URL=postgres://... npm run import:django -- [--media=../admin-abishek/media] [--replace]
+ *   DJANGO_DATABASE_URL=postgres://... npm run import:django -- [--media=../admin-abishek/media] [--replace] [--user=<username>]
  *
  * Reads the Django tables (info_profile, info_experience, info_education, info_skill,
  * info_project, info_achievement, info_testimonial, info_contactmessage) read-only and
@@ -18,6 +18,7 @@ import { resources } from '../resources.js';
 import { createItem } from '../services/collections.js';
 import { getSetting, setSetting } from '../services/settings.js';
 import { storeMedia } from '../services/media.js';
+import { targetAccount } from './account.js';
 
 const args = Object.fromEntries(process.argv.slice(2).map((a) => {
   const [k, v] = a.replace(/^--/, '').split('=');
@@ -34,6 +35,7 @@ const replace = Boolean(args.replace);
 const source = new pg.Client({ connectionString: sourceUrl, ssl: /sslmode=require|neon|prisma|render/.test(sourceUrl) ? { rejectUnauthorized: false } : undefined });
 await source.connect();
 await initDb();
+const { id: uid } = await targetAccount(args.user);
 
 async function rows(table, order = 'id') {
   try {
@@ -52,7 +54,7 @@ async function importFile(rel, opts) {
     return null;
   }
   try {
-    return (await storeMedia(fs.readFileSync(file), { filename: path.basename(rel), ...opts })).id;
+    return (await storeMedia(uid, fs.readFileSync(file), { filename: path.basename(rel), ...opts })).id;
   } catch (err) {
     console.warn(`  ! could not import ${rel}: ${err.message}`);
     return null;
@@ -64,17 +66,17 @@ const iso = (d) => (d ? new Date(d).toISOString() : new Date().toISOString());
 
 async function importCollection(name, sourceRows, map) {
   const spec = resources[name];
-  const existing = Number((await db.one(`SELECT COUNT(*) AS n FROM ${spec.table}`)).n);
+  const existing = Number((await db.one(`SELECT COUNT(*) AS n FROM ${spec.table} WHERE user_id = ?`, [uid])).n);
   if (existing && !replace) {
     console.log(`- ${name}: already has ${existing} items, skipped (use --replace)`);
     return;
   }
-  if (replace) await db.run(`DELETE FROM ${spec.table}`);
+  if (replace) await db.run(`DELETE FROM ${spec.table} WHERE user_id = ?`, [uid]);
   let n = 0;
   for (const r of sourceRows) {
     const input = await map(r);
-    const item = await createItem(spec, { ...input, sort_order: r.order ?? n }, { allowReadonly: true });
-    if (r.created_at) await db.run(`UPDATE ${spec.table} SET created_at = ? WHERE id = ?`, [iso(r.created_at), item.id]);
+    const item = await createItem(uid, spec, { ...input, sort_order: r.order ?? n }, { allowReadonly: true });
+    if (r.created_at) await db.run(`UPDATE ${spec.table} SET created_at = ? WHERE id = ? AND user_id = ?`, [iso(r.created_at), item.id, uid]);
     n++;
   }
   console.log(`✓ ${name}: ${n} imported`);
@@ -83,9 +85,9 @@ async function importCollection(name, sourceRows, map) {
 // Profile & contacts ---------------------------------------------------------
 const [profile] = await rows('info_profile');
 if (profile) {
-  const current = await getSetting('profile');
+  const current = await getSetting(uid, 'profile');
   const resumeId = current.resume_id && !replace ? current.resume_id : await importFile(profile.resume_file, { accept: 'document' });
-  await setSetting('profile', {
+  await setSetting(uid, 'profile', {
     full_name: profile.full_name,
     headline: profile.headline,
     summary: current.summary && !replace ? current.summary : profile.bio || '',

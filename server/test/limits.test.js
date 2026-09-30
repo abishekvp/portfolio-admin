@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 process.env.DATABASE_URL = '';
 process.env.SQLITE_PATH = ':memory:';
 
+const UID = 1; // account whose portfolio receives the submissions
+
 let db, limits, validate, resources, time;
 const settings = { per_email_daily: 1, per_ip_daily: 1 };
 
@@ -31,7 +33,7 @@ test('IP normalisation', () => {
 });
 
 test('one message per email and per IP per day', async () => {
-  const run = (identity) => limits.consumeAndRun('message', identity, settings, async () => 'stored');
+  const run = (identity) => limits.consumeAndRun(UID, 'message', identity, settings, async () => 'stored');
   assert.equal((await run({ email: 'x@example.com', ip: '198.51.100.1' })).ok, true);
   const sameEmail = await run({ email: 'X@example.com', ip: '198.51.100.2' });
   assert.equal(sameEmail.ok, false);
@@ -41,29 +43,32 @@ test('one message per email and per IP per day', async () => {
   assert.equal(sameIp.ok, false);
   assert.equal(sameIp.reason, 'ip');
   // testimonials are limited independently of messages
-  assert.equal((await limits.consumeAndRun('testimonial', { email: 'x@example.com', ip: '198.51.100.1' }, settings, async () => 1)).ok, true);
+  assert.equal((await limits.consumeAndRun(UID, 'testimonial', { email: 'x@example.com', ip: '198.51.100.1' }, settings, async () => 1)).ok, true);
   // pre-check agrees and records the blocked attempt
-  assert.equal((await limits.checkLimit('message', { email: 'x@example.com', ip: '203.0.113.50' }, settings)).ok, false);
+  assert.equal((await limits.checkLimit(UID, 'message', { email: 'x@example.com', ip: '203.0.113.50' }, settings)).ok, false);
+  // another account's portfolio has its own limits
+  assert.equal((await limits.consumeAndRun(UID + 1, 'message', { email: 'x@example.com', ip: '198.51.100.1' }, settings, async () => 1)).ok, true);
+  assert.equal((await limits.listToday(UID + 1)).length, 2);
 });
 
 test('a failed write does not consume the slot', async () => {
-  await assert.rejects(limits.consumeAndRun('message', { email: 'z@example.com', ip: '192.0.2.9' }, settings, async () => {
+  await assert.rejects(limits.consumeAndRun(UID, 'message', { email: 'z@example.com', ip: '192.0.2.9' }, settings, async () => {
     throw new Error('insert failed');
   }));
-  assert.equal((await limits.consumeAndRun('message', { email: 'z@example.com', ip: '192.0.2.9' }, settings, async () => 1)).ok, true);
+  assert.equal((await limits.consumeAndRun(UID, 'message', { email: 'z@example.com', ip: '192.0.2.9' }, settings, async () => 1)).ok, true);
 });
 
 test('entries from previous days are purged, so visitors can send again', async () => {
-  await db.run("UPDATE pm_submission_limits SET day = '2000-01-01'");
+  await db.run("UPDATE pm_daily_limits SET day = '2000-01-01'");
   assert.ok((await limits.purgeExpired()) > 0);
-  assert.equal((await db.all('SELECT * FROM pm_submission_limits')).length, 0);
-  assert.equal((await limits.consumeAndRun('message', { email: 'x@example.com', ip: '198.51.100.1' }, settings, async () => 1)).ok, true);
+  assert.equal((await db.all('SELECT * FROM pm_daily_limits')).length, 0);
+  assert.equal((await limits.consumeAndRun(UID, 'message', { email: 'x@example.com', ip: '198.51.100.1' }, settings, async () => 1)).ok, true);
 });
 
 test('limits of 0 disable a key', async () => {
   const open = { per_email_daily: 0, per_ip_daily: 0 };
   for (let i = 0; i < 3; i++) {
-    assert.equal((await limits.consumeAndRun('message', { email: 'free@example.com', ip: '192.0.2.77' }, open, async () => 1)).ok, true);
+    assert.equal((await limits.consumeAndRun(UID, 'message', { email: 'free@example.com', ip: '192.0.2.77' }, open, async () => 1)).ok, true);
   }
 });
 

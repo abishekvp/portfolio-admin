@@ -1,7 +1,7 @@
 /**
  * Per-collection normalisation that goes beyond field-level validation.
- * Each hook receives the validated values (merged over the current row on update)
- * and returns the values to store. Throw HttpError(400, msg, { field: msg }) to reject.
+ * Each hook receives the validated values (merged over the current row on update), the current
+ * row, the set of provided keys and the owning account id, and returns the values to store. Throw HttpError(400, msg, { field: msg }) to reject.
  */
 import { db } from '../db/index.js';
 import { CUSTOM_FIELD_TYPES, CUSTOM_TYPES } from '../resources.js';
@@ -114,7 +114,7 @@ export function normalizeCustomValue(type, value, schema) {
   }
 }
 
-async function customContent(values, current, provided) {
+async function customContent(values, current, provided, uid) {
   values.group_key = slugify(values.group_key);
   values.key = slugify(values.key || values.label);
   if (!SLUG.test(values.group_key)) fail('group_key', 'Use letters, numbers and underscores, starting with a letter');
@@ -126,7 +126,7 @@ async function customContent(values, current, provided) {
   values.value = normalizeCustomValue(values.type, resetValue ? null : values.value, values.schema);
   if (!values.label) values.label = values.key.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
 
-  const clash = await db.one('SELECT id FROM pm_custom_content WHERE group_key = ? AND key = ? AND id <> ?', [values.group_key, values.key, current?.id ?? 0]);
+  const clash = await db.one('SELECT id FROM pm_custom_content WHERE user_id = ? AND group_key = ? AND key = ? AND id <> ?', [uid, values.group_key, values.key, current?.id ?? 0]);
   if (clash) fail('key', `“${values.group_key}.${values.key}” already exists`);
   return values;
 }

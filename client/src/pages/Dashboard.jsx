@@ -14,6 +14,7 @@ const CHECKLIST = [
   ['experience', 'At least one experience entry', '/experience'],
   ['projects', 'At least one project', '/projects'],
   ['skills', 'Skills added', '/skills'],
+  ['connected', 'Website connected with your API key', '/integration'],
 ];
 
 export default function Dashboard() {

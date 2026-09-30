@@ -30,11 +30,17 @@ const PUBLIC_COLLECTIONS = ['contacts', 'experience', 'education', 'skills', 'pr
 // Keyed by content version, which is read from the database on every request, so a
 // cached entry is never stale even with several serverless instances.
 const cache = new Map();
+const CACHE_MAX_BYTES = 40 * 1024 * 1024;
+let cacheBytes = 0;
+function cacheDelete(key) {
+  cacheBytes -= cache.get(key)?.body.length || 0;
+  cache.delete(key);
+}
 
-async function loadPublic(name) {
+async function loadPublic(uid, name) {
   const spec = resources[name];
-  const where = name === 'testimonials' ? "WHERE status = 'approved'" : 'WHERE visible = 1';
-  const rows = await db.all(`SELECT * FROM ${spec.table} ${where} ORDER BY ${spec.publicOrderBy || spec.orderBy}`);
+  const where = name === 'testimonials' ? "status = 'approved'" : 'visible = 1';
+  const rows = await db.all(`SELECT * FROM ${spec.table} WHERE user_id = ? AND ${where} ORDER BY ${spec.publicOrderBy || spec.orderBy}`, [uid]);
   return rows.map((r) => {
     const item = rowToJson(spec, r);
     for (const key of [...(PUBLIC_OMIT[name] || []), 'visible', 'created_at', 'updated_at', 'sort_order']) delete item[key];
@@ -90,19 +96,23 @@ function buildCustom(rows, urlOf) {
   return custom;
 }
 
-export async function buildBundle({ baseUrl, inline = false }) {
-  const version = await getContentVersion();
+/**
+ * `uid` is the account whose portfolio is served; `apiKey` (when the request used one) is put
+ * into the stable resume link so it resolves to the same account.
+ */
+export async function buildBundle({ uid, baseUrl, inline = false, apiKey = '' }) {
+  const version = await getContentVersion(uid);
   const base = config.publicUrl || baseUrl;
-  const key = `${version}|${base}|${inline ? 1 : 0}`;
+  const key = `${uid}|${version}|${base}|${inline ? 1 : 0}|${apiKey}`;
   if (cache.has(key)) return cache.get(key);
 
-  const settings = await getAllSettings({ publicOnly: true });
-  const lists = Object.fromEntries(await Promise.all(PUBLIC_COLLECTIONS.map(async (n) => [n, await loadPublic(n)])));
+  const settings = await getAllSettings(uid, { publicOnly: true });
+  const lists = Object.fromEntries(await Promise.all(PUBLIC_COLLECTIONS.map(async (n) => [n, await loadPublic(uid, n)])));
   const { custom_content: customRows, ...collections } = lists;
 
   const ids = collectIds({ profile: settings.profile, seo: settings.seo, ...collections }, new Set());
   for (const r of customRows) customMediaIds(r).forEach((id) => ids.add(id));
-  const meta = await getMediaMeta([...ids]);
+  const meta = await getMediaMeta(uid, [...ids]);
   const urlOf = (id) => {
     const m = id ? meta.get(id) : null;
     return m ? base + mediaPath(m) : '';
@@ -118,7 +128,9 @@ export async function buildBundle({ baseUrl, inline = false }) {
 
   const profile = attachUrls(settings.profile, urlOf);
   // Stable resume link: the uploaded PDF, otherwise the external URL.
-  profile.resume_url = settings.profile.resume_id ? `${base}/api/resume` : settings.profile.resume_url;
+  profile.resume_url = settings.profile.resume_id
+    ? `${base}/api/resume${apiKey ? `?key=${encodeURIComponent(apiKey)}` : ''}`
+    : settings.profile.resume_url;
 
   const data = {
     profile,
@@ -135,7 +147,7 @@ export async function buildBundle({ baseUrl, inline = false }) {
     const small = [...meta.values()]
       .filter((m) => m.mime.startsWith('image/') && Number(m.size) <= config.inlineMediaMaxBytes)
       .sort((a, b) => Number(a.size) - Number(b.size));
-    const blobs = await getMediaData(small.map((m) => Number(m.id)));
+    const blobs = await getMediaData(uid, small.map((m) => Number(m.id)));
     for (const m of small) {
       const b = blobs.get(Number(m.id));
       if (!b || b.data.length > budget) continue;
@@ -146,7 +158,13 @@ export async function buildBundle({ baseUrl, inline = false }) {
 
   const body = JSON.stringify({ status: 'success', version, generated_at: new Date().toISOString(), data, media });
   const entry = { body, etag: `"${crypto.createHash('sha1').update(body).digest('base64url')}"`, version };
-  if (cache.size > 20) cache.clear();
+  // Drop this account's entries for older versions, and cap the total size across accounts.
+  for (const [k, v] of cache) if (k.startsWith(`${uid}|`) && v.version !== version) cacheDelete(k);
+  if (cacheBytes + body.length > CACHE_MAX_BYTES) {
+    cache.clear();
+    cacheBytes = 0;
+  }
   cache.set(key, entry);
+  cacheBytes += body.length;
   return entry;
 }

@@ -2,7 +2,7 @@
  * Daily submission limits for public contact messages and testimonials.
  *
  * Each accepted submission consumes one slot for its (kind, email) and (kind, ip) keys for the
- * current day in APP_TIMEZONE. Once either key reaches its limit, further submissions of that
+ * current day in APP_TIMEZONE, per account (a visitor's limit on one portfolio does not affect another). Once either key reaches its limit, further submissions of that
  * kind are rejected until the day ends. Rows are purged at local midnight (and on startup), so
  * the visitor can send again the next day.
  */
@@ -69,13 +69,13 @@ async function purgeIfNewDay(day) {
 }
 
 /** Read-only pre-check (used before expensive work such as image processing). */
-export async function checkLimit(kind, identity, settings) {
+export async function checkLimit(uid, kind, identity, settings) {
   const day = dayKey();
   await purgeIfNewDay(day);
   for (const k of keysFor(identity, settings)) {
-    const row = await db.one('SELECT count FROM pm_submission_limits WHERE kind = ? AND key_type = ? AND key_value = ? AND day = ?', [kind, k.key_type, k.key_value, day]);
+    const row = await db.one('SELECT count FROM pm_daily_limits WHERE user_id = ? AND kind = ? AND key_type = ? AND key_value = ? AND day = ?', [uid, kind, k.key_type, k.key_value, day]);
     if (row && Number(row.count) >= k.limit) {
-      await recordBlocked(kind, k, day);
+      await recordBlocked(uid, kind, k, day);
       return blocked(kind, k, day);
     }
   }
@@ -92,13 +92,13 @@ function blocked(kind, k, day) {
   };
 }
 
-async function recordBlocked(kind, k, day) {
+async function recordBlocked(uid, kind, k, day) {
   const now = nowIso();
   await db.run(
-    `INSERT INTO pm_submission_limits (kind, key_type, key_value, day, count, blocked, first_at, last_at)
-     VALUES (?, ?, ?, ?, 0, 1, ?, ?)
-     ON CONFLICT (kind, key_type, key_value, day) DO UPDATE SET blocked = pm_submission_limits.blocked + 1, last_at = excluded.last_at`,
-    [kind, k.key_type, k.key_value, day, now, now]
+    `INSERT INTO pm_daily_limits (user_id, kind, key_type, key_value, day, count, blocked, first_at, last_at)
+     VALUES (?, ?, ?, ?, ?, 0, 1, ?, ?)
+     ON CONFLICT (user_id, kind, key_type, key_value, day) DO UPDATE SET blocked = pm_daily_limits.blocked + 1, last_at = excluded.last_at`,
+    [uid, kind, k.key_type, k.key_value, day, now, now]
   ).catch(() => {});
 }
 
@@ -107,7 +107,7 @@ async function recordBlocked(kind, k, day) {
  * If any key is over its limit, nothing is written (besides a "blocked" counter) and
  * `{ ok: false, ... }` is returned.
  */
-export async function consumeAndRun(kind, identity, settings, work) {
+export async function consumeAndRun(uid, kind, identity, settings, work) {
   const day = dayKey();
   await purgeIfNewDay(day);
   const keys = keysFor(identity, settings);
@@ -119,11 +119,11 @@ export async function consumeAndRun(kind, identity, settings, work) {
       const now = nowIso();
       for (const k of keys) {
         const { rows } = await t.run(
-          `INSERT INTO pm_submission_limits (kind, key_type, key_value, day, count, blocked, first_at, last_at)
-           VALUES (?, ?, ?, ?, 1, 0, ?, ?)
-           ON CONFLICT (kind, key_type, key_value, day) DO UPDATE SET count = pm_submission_limits.count + 1, last_at = excluded.last_at
+          `INSERT INTO pm_daily_limits (user_id, kind, key_type, key_value, day, count, blocked, first_at, last_at)
+           VALUES (?, ?, ?, ?, ?, 1, 0, ?, ?)
+           ON CONFLICT (user_id, kind, key_type, key_value, day) DO UPDATE SET count = pm_daily_limits.count + 1, last_at = excluded.last_at
            RETURNING count`,
-          [kind, k.key_type, k.key_value, day, now, now]
+          [uid, kind, k.key_type, k.key_value, day, now, now]
         );
         if (Number(rows[0]?.count) > k.limit) {
           offending = k;
@@ -135,24 +135,24 @@ export async function consumeAndRun(kind, identity, settings, work) {
     return { ok: true, result };
   } catch (err) {
     if (err !== OVER) throw err;
-    await recordBlocked(kind, offending, day);
+    await recordBlocked(uid, kind, offending, day);
     return blocked(kind, offending, day);
   }
 }
 
 export async function purgeExpired() {
-  const { changes } = await db.run('DELETE FROM pm_submission_limits WHERE day < ?', [dayKey()]);
+  const { changes } = await db.run('DELETE FROM pm_daily_limits WHERE day < ?', [dayKey()]);
   return changes;
 }
 
-export async function listToday() {
-  const rows = await db.all('SELECT * FROM pm_submission_limits WHERE day = ? ORDER BY last_at DESC', [dayKey()]);
+export async function listToday(uid) {
+  const rows = await db.all('SELECT * FROM pm_daily_limits WHERE user_id = ? AND day = ? ORDER BY last_at DESC', [uid, dayKey()]);
   return rows.map((r) => ({ ...r, count: Number(r.count), blocked: Number(r.blocked) }));
 }
 
-export async function clearEntries({ id, all } = {}) {
-  if (all) return (await db.run('DELETE FROM pm_submission_limits')).changes;
-  return (await db.run('DELETE FROM pm_submission_limits WHERE id = ?', [Number(id)])).changes;
+export async function clearEntries(uid, { id, all } = {}) {
+  if (all) return (await db.run('DELETE FROM pm_daily_limits WHERE user_id = ?', [uid])).changes;
+  return (await db.run('DELETE FROM pm_daily_limits WHERE id = ? AND user_id = ?', [Number(id), uid])).changes;
 }
 
 let timer = null;

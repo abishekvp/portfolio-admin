@@ -14,9 +14,13 @@ import {
   bulkUpdate, createItem, deleteItems, getItem, listItems, logActivity, reorderItems, updateItem,
 } from '../services/collections.js';
 import { SETTINGS, bumpContentVersion, getAllSettings, getSetting, setSetting, settingsMediaRefs } from '../services/settings.js';
-import { decodeDataUri, mediaPath, storeMedia } from '../services/media.js';
+import { decodeDataUri, mediaPath, storageInfo, storeMedia } from '../services/media.js';
 import { purgeAnalytics, summary } from '../services/analytics.js';
 import { clearEntries, listToday } from '../services/limits.js';
+import { createApiKey, deleteApiKey, listApiKeys, renameApiKey, rollApiKey } from '../services/apikeys.js';
+
+// Everything here works on the signed-in account's own portfolio: `uid(req)` scopes every query.
+const uid = (req) => req.user.id;
 
 const router = express.Router();
 router.use(requireAdmin);
@@ -31,23 +35,27 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: con
 // ------------------------------------------------------------------ overview
 
 router.get('/overview', ah(async (req, res) => {
-  const n = async (sql, params) => Number((await db.one(sql, params))?.n || 0);
+  const u = uid(req);
+  const n = async (sql) => Number((await db.one(sql, [u]))?.n || 0);
   const counts = {};
-  for (const [name, spec] of Object.entries(resources)) counts[name] = await n(`SELECT COUNT(*) AS n FROM ${spec.table}`);
+  for (const [name, spec] of Object.entries(resources)) counts[name] = await n(`SELECT COUNT(*) AS n FROM ${spec.table} WHERE user_id = ?`);
   const [unread, pending, media, limitsToday] = await Promise.all([
-    n('SELECT COUNT(*) AS n FROM pm_messages WHERE is_read = 0 AND is_archived = 0'),
-    n("SELECT COUNT(*) AS n FROM pm_testimonials WHERE status = 'pending'"),
-    n('SELECT COUNT(*) AS n FROM pm_media'),
-    n('SELECT COUNT(*) AS n FROM pm_submission_limits WHERE blocked > 0'),
+    n('SELECT COUNT(*) AS n FROM pm_messages WHERE user_id = ? AND is_read = 0 AND is_archived = 0'),
+    n("SELECT COUNT(*) AS n FROM pm_testimonials WHERE user_id = ? AND status = 'pending'"),
+    n('SELECT COUNT(*) AS n FROM pm_media WHERE user_id = ?'),
+    n('SELECT COUNT(*) AS n FROM pm_daily_limits WHERE user_id = ? AND blocked > 0'),
   ]);
-  const recentMessages = await db.all('SELECT id, name, email, subject, is_read, created_at FROM pm_messages WHERE is_archived = 0 ORDER BY created_at DESC LIMIT 5');
-  const pendingTestimonials = await db.all("SELECT id, name, role, company, content, created_at FROM pm_testimonials WHERE status = 'pending' ORDER BY created_at DESC LIMIT 5");
-  const profile = await getSetting('profile');
+  const recentMessages = await db.all('SELECT id, name, email, subject, is_read, created_at FROM pm_messages WHERE user_id = ? AND is_archived = 0 ORDER BY created_at DESC LIMIT 5', [u]);
+  const pendingTestimonials = await db.all("SELECT id, name, role, company, content, created_at FROM pm_testimonials WHERE user_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 5", [u]);
+  const profile = await getSetting(u, 'profile');
+  const keys = await listApiKeys(u);
+  const stats = await summary(u, Number(req.query.days) || 14);
   res.json({
     counts: { ...counts, unread_messages: unread, pending_testimonials: pending, media, blocked_today: limitsToday },
     recent_messages: recentMessages.map((m) => ({ ...m, is_read: Boolean(m.is_read) })),
     pending_testimonials: pendingTestimonials,
-    analytics: await summary(Number(req.query.days) || 14),
+    analytics: stats,
+    storage: await storageInfo(u),
     checklist: {
       profile: Boolean(profile.full_name && profile.email),
       photo: Boolean(profile.photo_id),
@@ -57,23 +65,25 @@ router.get('/overview', ah(async (req, res) => {
       projects: counts.projects > 0,
       experience: counts.experience > 0,
       skills: counts.skills > 0,
+      // A site has used one of the keys (or, for sites embedded without a key, sent visits).
+      connected: keys.some((k) => k.last_used_at) || stats.views.total > 0,
     },
   });
 }));
 
 router.get('/badges', ah(async (req, res) => {
-  const unread = await db.one('SELECT COUNT(*) AS n FROM pm_messages WHERE is_read = 0 AND is_archived = 0');
-  const pending = await db.one("SELECT COUNT(*) AS n FROM pm_testimonials WHERE status = 'pending'");
+  const unread = await db.one('SELECT COUNT(*) AS n FROM pm_messages WHERE user_id = ? AND is_read = 0 AND is_archived = 0', [uid(req)]);
+  const pending = await db.one("SELECT COUNT(*) AS n FROM pm_testimonials WHERE user_id = ? AND status = 'pending'", [uid(req)]);
   res.json({ messages: Number(unread.n), testimonials: Number(pending.n) });
 }));
 
 router.get('/analytics', ah(async (req, res) => {
-  res.json(await summary(Number(req.query.days) || 30));
+  res.json(await summary(uid(req), Number(req.query.days) || 30));
 }));
 
 router.post('/analytics/purge', json, ah(async (req, res) => {
   const days = Math.max(1, Number.parseInt(req.body?.older_than_days, 10) || 365);
-  const result = await purgeAnalytics(days);
+  const result = await purgeAnalytics(uid(req), days);
   await logActivity(req.user, 'purge', 'analytics', null, `Removed analytics older than ${days} days`);
   res.json({ status: 'success', ...result });
 }));
@@ -89,15 +99,15 @@ function spec(req) {
 const itemLabel = (item) => item?.title || item?.name || item?.job_title || item?.institution || `#${item?.id}`;
 
 router.get('/c/:resource', ah(async (req, res) => {
-  res.json(await listItems(spec(req), req.query));
+  res.json(await listItems(uid(req), spec(req), req.query));
 }));
 
 router.get('/c/:resource/:id', ah(async (req, res) => {
   const s = spec(req);
-  const item = await getItem(s, req.params.id);
+  const item = await getItem(uid(req), s, req.params.id);
   // Opening a message marks it as read.
   if (s === resources.messages && !item.is_read && req.query.mark_read !== '0') {
-    await updateItem(s, item.id, { is_read: true });
+    await updateItem(uid(req), s, item.id, { is_read: true });
     item.is_read = true;
   }
   res.json(item);
@@ -106,35 +116,35 @@ router.get('/c/:resource/:id', ah(async (req, res) => {
 router.post('/c/:resource', json, ah(async (req, res) => {
   const s = spec(req);
   if (s.creatable === false) throw new HttpError(405, `${s.label} cannot be created from the admin`);
-  const item = await createItem(s, req.body);
+  const item = await createItem(uid(req), s, req.body);
   await logActivity(req.user, 'create', req.params.resource, item.id, itemLabel(item));
   res.status(201).json(item);
 }));
 
 router.patch('/c/:resource/:id', json, ah(async (req, res) => {
-  const item = await updateItem(spec(req), req.params.id, req.body);
+  const item = await updateItem(uid(req), spec(req), req.params.id, req.body);
   await logActivity(req.user, 'update', req.params.resource, item.id, itemLabel(item));
   res.json(item);
 }));
 router.put('/c/:resource/:id', json, ah(async (req, res) => {
-  const item = await updateItem(spec(req), req.params.id, req.body);
+  const item = await updateItem(uid(req), spec(req), req.params.id, req.body);
   await logActivity(req.user, 'update', req.params.resource, item.id, itemLabel(item));
   res.json(item);
 }));
 
 router.delete('/c/:resource/:id', ah(async (req, res) => {
   const s = spec(req);
-  const item = await getItem(s, req.params.id);
-  await deleteItems(s, [item.id]);
+  const item = await getItem(uid(req), s, req.params.id);
+  await deleteItems(uid(req), s, [item.id]);
   // Photos uploaded by website visitors belong to their testimonial.
-  if (s === resources.testimonials && item.source === 'website' && item.photo_id) await deleteMediaIfUnused(item.photo_id);
+  if (s === resources.testimonials && item.source === 'website' && item.photo_id) await deleteMediaIfUnused(uid(req), item.photo_id);
   await logActivity(req.user, 'delete', req.params.resource, item.id, itemLabel(item));
   res.json({ status: 'success' });
 }));
 
 router.post('/c/:resource/reorder', json, ah(async (req, res) => {
   const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
-  await reorderItems(spec(req), ids);
+  await reorderItems(uid(req), spec(req), ids);
   await logActivity(req.user, 'reorder', req.params.resource, null, `Reordered ${ids.length} items`);
   res.json({ status: 'success' });
 }));
@@ -144,8 +154,8 @@ router.post('/c/:resource/bulk', json, ah(async (req, res) => {
   const ids = Array.isArray(req.body?.ids) ? req.body.ids.slice(0, 500) : [];
   const action = req.body?.action;
   let affected = 0;
-  if (action === 'delete') affected = await deleteItems(s, ids);
-  else if (action === 'update') affected = await bulkUpdate(s, ids, req.body?.patch || {});
+  if (action === 'delete') affected = await deleteItems(uid(req), s, ids);
+  else if (action === 'update') affected = await bulkUpdate(uid(req), s, ids, req.body?.patch || {});
   else throw new HttpError(400, 'Unknown bulk action');
   await logActivity(req.user, `bulk_${action}`, req.params.resource, null, `${affected} item(s)`);
   res.json({ status: 'success', affected });
@@ -154,11 +164,11 @@ router.post('/c/:resource/bulk', json, ah(async (req, res) => {
 router.post('/c/:resource/:id/duplicate', ah(async (req, res) => {
   const s = spec(req);
   if (s.creatable === false) throw new HttpError(405, 'Not supported');
-  const { id, created_at, updated_at, sort_order, ...rest } = await getItem(s, req.params.id);
+  const { id, created_at, updated_at, sort_order, ...rest } = await getItem(uid(req), s, req.params.id);
   const titleField = ['title', 'name', 'job_title', 'institution'].find((k) => s.fields[k]);
   if (titleField) rest[titleField] = `${rest[titleField]} (copy)`.slice(0, s.fields[titleField].max);
   if ('visible' in s.fields) rest.visible = false;
-  const item = await createItem(s, rest);
+  const item = await createItem(uid(req), s, rest);
   await logActivity(req.user, 'duplicate', req.params.resource, item.id, itemLabel(item));
   res.status(201).json(item);
 }));
@@ -166,22 +176,22 @@ router.post('/c/:resource/:id/duplicate', ah(async (req, res) => {
 // ------------------------------------------------------------------ settings
 
 router.get('/settings', ah(async (req, res) => {
-  res.json(await getAllSettings());
+  res.json(await getAllSettings(uid(req)));
 }));
 
 router.get('/settings/:key', ah(async (req, res) => {
-  res.json(await getSetting(req.params.key));
+  res.json(await getSetting(uid(req), req.params.key));
 }));
 
 router.put('/settings/:key', json, ah(async (req, res) => {
-  const value = await setSetting(req.params.key, req.body, { partial: false });
+  const value = await setSetting(uid(req), req.params.key, req.body, { partial: false });
   await logActivity(req.user, 'update', 'settings', req.params.key, SETTINGS[req.params.key]?.label);
   res.json(value);
 }));
 
 // ------------------------------------------------------------------ media
 
-async function mediaUsage() {
+async function mediaUsage(u) {
   const usage = new Map();
   const add = (id, where) => {
     if (!id) return;
@@ -191,28 +201,29 @@ async function mediaUsage() {
   for (const [name, s] of Object.entries(resources)) {
     const fields = mediaFieldNames(s);
     if (!fields.length) continue;
-    const rows = await db.all(`SELECT id, ${fields.join(', ')} FROM ${s.table}`);
+    const rows = await db.all(`SELECT id, ${fields.join(', ')} FROM ${s.table} WHERE user_id = ?`, [u]);
     for (const r of rows) for (const fld of fields) add(Number(r[fld]), `${s.label} #${r.id}`);
   }
-  for (const ref of await settingsMediaRefs()) add(ref.id, `Settings: ${ref.where}`);
-  for (const r of await db.all('SELECT id, group_key, key, type, value, schema FROM pm_custom_content')) {
+  for (const ref of await settingsMediaRefs(u)) add(ref.id, `Settings: ${ref.where}`);
+  for (const r of await db.all('SELECT id, group_key, key, type, value, schema FROM pm_custom_content WHERE user_id = ?', [u])) {
     const row = rowToJson(resources.custom_content, r);
     for (const id of customMediaIds(row)) add(id, `Custom content ${row.group_key}.${row.key}`);
   }
   return usage;
 }
 
-async function deleteMediaIfUnused(id) {
-  const usage = await mediaUsage();
-  if (!usage.has(Number(id))) await db.run('DELETE FROM pm_media WHERE id = ?', [Number(id)]);
+async function deleteMediaIfUnused(u, id) {
+  const usage = await mediaUsage(u);
+  if (!usage.has(Number(id))) await db.run('DELETE FROM pm_media WHERE id = ? AND user_id = ?', [Number(id), u]);
 }
 
 router.get('/media', ah(async (req, res) => {
-  const rows = await db.all('SELECT id, filename, mime, size, width, height, alt, source, created_at FROM pm_media ORDER BY id DESC');
-  const usage = await mediaUsage();
+  const rows = await db.all('SELECT id, filename, mime, size, width, height, sha256, alt, source, created_at FROM pm_media WHERE user_id = ? ORDER BY id DESC', [uid(req)]);
+  const usage = await mediaUsage(uid(req));
   const base = baseUrl(req);
   const kind = req.query.kind;
   res.json({
+    storage: await storageInfo(uid(req)),
     items: rows
       .filter((r) => !kind || (kind === 'image' ? r.mime.startsWith('image/') : !r.mime.startsWith('image/')))
       .map((r) => ({ ...r, size: Number(r.size), url: mediaPath(r), absolute_url: base + mediaPath(r), used_by: usage.get(Number(r.id)) || [] })),
@@ -229,35 +240,37 @@ router.post('/media', upload.single('file'), json, ah(async (req, res) => {
     filename = req.body.filename;
   }
   if (!buffer) throw new HttpError(400, 'No file received');
-  const row = await storeMedia(buffer, { filename, accept, preset, alt: req.body?.alt || '' });
+  const row = await storeMedia(uid(req), buffer, { filename, accept, preset, alt: req.body?.alt || '' });
   await logActivity(req.user, 'upload', 'media', row.id, row.filename);
   res.status(201).json({ ...row, size: Number(row.size), url: mediaPath(row), absolute_url: baseUrl(req) + mediaPath(row) });
 }));
 
 router.patch('/media/:id', json, ah(async (req, res) => {
-  await db.run('UPDATE pm_media SET alt = ? WHERE id = ?', [String(req.body?.alt || '').slice(0, 300), Number(req.params.id)]);
-  await bumpContentVersion();
+  const { changes } = await db.run('UPDATE pm_media SET alt = ? WHERE id = ? AND user_id = ?', [String(req.body?.alt || '').slice(0, 300), Number(req.params.id), uid(req)]);
+  if (!changes) throw new HttpError(404, 'Media not found');
+  await bumpContentVersion(uid(req));
   res.json({ status: 'success' });
 }));
 
 router.delete('/media/:id', ah(async (req, res) => {
   const id = Number(req.params.id);
-  const used = (await mediaUsage()).get(id);
+  if (!(await db.one('SELECT id FROM pm_media WHERE id = ? AND user_id = ?', [id, uid(req)]))) throw new HttpError(404, 'Media not found');
+  const used = (await mediaUsage(uid(req))).get(id);
   if (used?.length && req.query.force !== '1') {
     throw new HttpError(409, `This file is still used by: ${used.join(', ')}`);
   }
-  const { changes } = await db.run('DELETE FROM pm_media WHERE id = ?', [id]);
+  const { changes } = await db.run('DELETE FROM pm_media WHERE id = ? AND user_id = ?', [id, uid(req)]);
   if (!changes) throw new HttpError(404, 'Media not found');
-  await bumpContentVersion();
+  await bumpContentVersion(uid(req));
   await logActivity(req.user, 'delete', 'media', id, used?.length ? 'Forced delete of a file in use' : '');
   res.json({ status: 'success' });
 }));
 
 router.post('/media/purge-unused', ah(async (req, res) => {
-  const usage = await mediaUsage();
-  const rows = await db.all('SELECT id FROM pm_media');
+  const usage = await mediaUsage(uid(req));
+  const rows = await db.all('SELECT id FROM pm_media WHERE user_id = ?', [uid(req)]);
   const unused = rows.map((r) => Number(r.id)).filter((id) => !usage.has(id));
-  if (unused.length) await db.run(`DELETE FROM pm_media WHERE id IN (${unused.map(() => '?').join(',')})`, unused);
+  if (unused.length) await db.run(`DELETE FROM pm_media WHERE user_id = ? AND id IN (${unused.map(() => '?').join(',')})`, [uid(req), ...unused]);
   await logActivity(req.user, 'purge', 'media', null, `Removed ${unused.length} unused file(s)`);
   res.json({ status: 'success', removed: unused.length });
 }));
@@ -265,17 +278,17 @@ router.post('/media/purge-unused', ah(async (req, res) => {
 // ------------------------------------------------------------------ submission limits
 
 router.get('/limits', ah(async (req, res) => {
-  res.json({ items: await listToday(), settings: await getSetting('submissions') });
+  res.json({ items: await listToday(uid(req)), settings: await getSetting(uid(req), 'submissions') });
 }));
 
 router.delete('/limits/:id', ah(async (req, res) => {
-  await clearEntries({ id: req.params.id });
+  await clearEntries(uid(req), { id: req.params.id });
   await logActivity(req.user, 'clear', 'limits', req.params.id, 'Unblocked a visitor for today');
   res.json({ status: 'success' });
 }));
 
 router.delete('/limits', ah(async (req, res) => {
-  const removed = await clearEntries({ all: true });
+  const removed = await clearEntries(uid(req), { all: true });
   await logActivity(req.user, 'clear', 'limits', null, `Cleared all ${removed} limit entries`);
   res.json({ status: 'success', removed });
 }));
@@ -284,7 +297,7 @@ router.delete('/limits', ah(async (req, res) => {
 
 router.get('/activity', ah(async (req, res) => {
   const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 100));
-  res.json({ items: await db.all('SELECT * FROM pm_activity ORDER BY id DESC LIMIT ?', [limit]) });
+  res.json({ items: await db.all('SELECT * FROM pm_activity WHERE user_id = ? ORDER BY id DESC LIMIT ?', [uid(req), limit]) });
 }));
 
 // ------------------------------------------------------------------ integration info
@@ -293,10 +306,13 @@ router.get('/integration', ah(async (req, res) => {
   const base = baseUrl(req);
   res.json({
     base_url: base,
+    username: req.user.username,
     sdk_url: `${base}/api/portfolio_manager.js`,
-    snippet: `<script src="${base}/api/portfolio_manager.js" async></script>`,
+    keys: await listApiKeys(uid(req)),
+    // Endpoints take the key as ?key=, the X-Portfolio-Key header or Authorization: Bearer.
     endpoints: {
       bundle: `${base}/api/portfolio?inline=1`,
+      version: `${base}/api/portfolio/version`,
       message: `${base}/api/messages/send`,
       testimonial: `${base}/api/testimonials/submit`,
       analytics: `${base}/api/analytics/collect`,
@@ -305,20 +321,49 @@ router.get('/integration', ah(async (req, res) => {
   });
 }));
 
+// ------------------------------------------------------------------ API keys
+
+router.get('/keys', ah(async (req, res) => {
+  res.json({ items: await listApiKeys(uid(req)) });
+}));
+
+router.post('/keys', json, ah(async (req, res) => {
+  const key = await createApiKey(uid(req), req.body?.name);
+  await logActivity(req.user, 'create', 'api_key', key.id, key.name);
+  res.status(201).json(key);
+}));
+
+router.patch('/keys/:id', json, ah(async (req, res) => {
+  await renameApiKey(uid(req), req.params.id, req.body?.name);
+  res.json({ status: 'success' });
+}));
+
+router.post('/keys/:id/roll', ah(async (req, res) => {
+  const key = await rollApiKey(uid(req), req.params.id);
+  await logActivity(req.user, 'roll', 'api_key', key.id, `${key.name} (old key revoked)`);
+  res.json(key);
+}));
+
+router.delete('/keys/:id', ah(async (req, res) => {
+  await deleteApiKey(uid(req), req.params.id);
+  await logActivity(req.user, 'delete', 'api_key', req.params.id, 'Revoked an API key');
+  res.json({ status: 'success' });
+}));
+
 // ------------------------------------------------------------------ backup / restore
 
 router.get('/backup', ah(async (req, res) => {
   await logActivity(req.user, 'export', 'backup', null, 'Downloaded a backup');
   res.set({
     'Content-Type': 'application/json; charset=utf-8',
-    'Content-Disposition': `attachment; filename="portfolio-backup-${nowIso().slice(0, 10)}.json"`,
+    'Content-Disposition': `attachment; filename="portfolio-backup-${req.user.username.replace(/[^\w.-]+/g, '')}-${nowIso().slice(0, 10)}.json"`,
   });
-  await writeBackup((chunk) => res.write(chunk), { includeMessages: req.query.messages !== '0', includeMedia: req.query.media !== '0' });
+  await writeBackup(uid(req), (chunk) => res.write(chunk), { includeMessages: req.query.messages !== '0', includeMedia: req.query.media !== '0' });
   res.end();
 }));
 
 router.post('/backup/restore', express.json({ limit: config.isServerless ? '4.4mb' : '250mb' }), ah(async (req, res) => {
-  const stats = await restoreBackup(req.body);
+  const stats = await restoreBackup(uid(req), req.body);
   await logActivity(req.user, 'restore', 'backup', null, JSON.stringify(stats));
   res.json({ status: 'success', restored: stats });
 }));
@@ -330,7 +375,7 @@ router.get('/custom/presets', (req, res) => {
 });
 
 router.post('/custom/presets/:id/apply', json, ah(async (req, res) => {
-  const result = await applyCustomPreset(req.params.id, { overwrite: req.body?.overwrite === true });
+  const result = await applyCustomPreset(uid(req), req.params.id, { overwrite: req.body?.overwrite === true });
   await logActivity(req.user, 'preset', 'custom_content', req.params.id, `Added ${result.added}, updated ${result.updated}`);
   res.json({ status: 'success', ...result });
 }));

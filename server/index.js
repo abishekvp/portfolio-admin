@@ -18,15 +18,17 @@ import { HttpError } from './lib/validate.js';
 import publicRoutes from './routes/public.js';
 import authRoutes, { loadUser } from './routes/auth.js';
 import adminRoutes from './routes/admin.js';
+import platformRoutes from './routes/platform.js';
 import { purgeExpired, scheduleDailyPurge } from './services/limits.js';
 import { createUser, purgeExpiredSessions, purgeLoginFailures, userCount } from './services/auth.js';
 import { getSetting } from './services/settings.js';
+import { db } from './db/index.js';
 import { purgeAnalytics } from './services/analytics.js';
 
 async function bootstrapAdmin() {
   if (!config.adminUsername || !config.adminPassword || (await userCount()) > 0) return;
   try {
-    await createUser(config.adminUsername, config.adminPassword);
+    await createUser(config.adminUsername, config.adminPassword, '', { isAdmin: true });
     console.log(`[setup] created admin user "${config.adminUsername}" from ADMIN_USERNAME/ADMIN_PASSWORD`);
   } catch (err) {
     // e.g. password shorter than 10 characters — keep serving so the setup screen can explain.
@@ -39,8 +41,16 @@ export async function housekeeping() {
   const result = { limits: await purgeExpired() };
   await purgeExpiredSessions();
   await purgeLoginFailures();
-  const { retention_days } = await getSetting('analytics');
-  if (retention_days > 0) result.analytics = await purgeAnalytics(retention_days);
+  // Analytics retention is chosen per account.
+  result.analytics = { events: 0, sessions: 0 };
+  for (const { id } of await db.all('SELECT id FROM pm_users')) {
+    const { retention_days } = await getSetting(id, 'analytics');
+    if (retention_days > 0) {
+      const r = await purgeAnalytics(id, retention_days);
+      result.analytics.events += r.events;
+      result.analytics.sessions += r.sessions;
+    }
+  }
   return result;
 }
 
@@ -77,6 +87,7 @@ function buildApp() {
   app.use(loadUser);
   app.use('/api/auth', authRoutes);
   app.use('/api/admin', adminRoutes);
+  app.use('/api/platform', platformRoutes);
   app.use('/api', publicRoutes);
   app.use('/api', notFound);
 

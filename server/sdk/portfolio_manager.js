@@ -1,7 +1,10 @@
 /**
  * Portfolio Manager SDK v2 (portfolio_manager.js)
  *
- *   <script src="https://admin.example.com/api/portfolio_manager.js" async></script>
+ *   <script src="https://admin.example.com/api/portfolio_manager.js" data-key="pk_..." async></script>
+ *
+ * `data-key` is your account's publishable API key (Integration page). It picks whose portfolio
+ * is loaded and where form submissions and analytics go. Without it the server's default site is used.
  *
  * - Loads ALL portfolio content from the admin API in one request, including images
  *   (as base64 data URIs), and keeps it in sessionStorage. Every page load renders instantly
@@ -23,7 +26,8 @@
  *   .trackEvent(type, data), .trackResumeDownload(fileName)
  * Events: window 'portfolio:data' (detail: {data, version, source}), 'portfolio:error'.
  *
- * Script attributes: data-api="https://admin.example.com"
+ * Script attributes: data-key="pk_..." (your API key)
+ *                    data-api="https://admin.example.com"
  *                    data-cache-ttl="0" (seconds to trust the cache without asking the server;
  *                    default 0 = check on every page load)
  *                    data-track="false" (disable analytics)  data-inline-images="false"
@@ -45,13 +49,19 @@
     return location.origin;
   })();
 
-  var ENDPOINTS = {
-    bundle: BASE + '/api/portfolio',
-    message: BASE + '/api/messages/send',
-    testimonial: BASE + '/api/testimonials/submit',
-    collect: attr('data-endpoint') || BASE + '/api/analytics/collect'
+  // Sent as ?key= (not a header) so every request stays a "simple" CORS request and beacons work.
+  var KEY = (attr('data-key') || attr('data-api-key') || '').trim();
+  var withKey = function (url) {
+    return KEY ? url + (url.indexOf('?') === -1 ? '?' : '&') + 'key=' + encodeURIComponent(KEY) : url;
   };
-  var CACHE_KEY = 'pm_portfolio_cache_v2';
+  var ENDPOINTS = {
+    bundle: withKey(BASE + '/api/portfolio'),
+    message: withKey(BASE + '/api/messages/send'),
+    testimonial: withKey(BASE + '/api/testimonials/submit'),
+    collect: withKey(attr('data-endpoint') || BASE + '/api/analytics/collect')
+  };
+  // One cache per key, so two portfolios on the same origin never mix their data.
+  var CACHE_KEY = 'pm_portfolio_cache_v2' + (KEY ? '_' + KEY.slice(-12) : '');
   var SID_KEY = 'pm_sid';
   // Default 0: revalidate on every page load so admin edits appear on a normal refresh.
   var TTL_MS = Math.max(0, Number(attr('data-cache-ttl')) || 0) * 1000;
@@ -167,7 +177,7 @@
     }
     if (inflight) return inflight;
 
-    var url = ENDPOINTS.bundle + '?inline=' + (INLINE ? '1' : '0');
+    var url = ENDPOINTS.bundle + (ENDPOINTS.bundle.indexOf('?') === -1 ? '?' : '&') + 'inline=' + (INLINE ? '1' : '0');
     if (cached && cached.version && !force && !cached.lite) url += '&since=' + encodeURIComponent(cached.version);
 
     inflight = fetch(url, { method: 'GET', credentials: 'omit', headers: { Accept: 'application/json' } })

@@ -48,10 +48,19 @@ export const config = {
 
   cookieSecure: bool(process.env.COOKIE_SECURE, isProd),
 
-  // First-run bootstrap. Either set both, or use the /setup screen (guarded by SETUP_TOKEN in production).
+  // First-run bootstrap. Either set both, or create the first account on the sign-up screen
+  // (guarded by SETUP_TOKEN in production). The first account is the platform admin.
   adminUsername: process.env.ADMIN_USERNAME || '',
   adminPassword: process.env.ADMIN_PASSWORD || '',
   setupToken: process.env.SETUP_TOKEN || '',
+
+  // Anyone can create an account (and get their own portfolio + API keys) unless disabled.
+  signupEnabled: bool(process.env.SIGNUP_ENABLED, true),
+  // Whose portfolio the public API serves when a request carries no API key: '' = the oldest
+  // account (keeps sites embedded before API keys existed working), a username, or 'none'.
+  defaultSite: (process.env.DEFAULT_SITE || '').trim(),
+  // Media storage per account (images, PDFs). 0 = unlimited. Platform admins are never capped.
+  accountStorageBytes: (process.env.ACCOUNT_STORAGE_MB == null || process.env.ACCOUNT_STORAGE_MB === '' ? 50 : Number(process.env.ACCOUNT_STORAGE_MB)) * 1024 * 1024,
 
   // Serverless (Vercel): no background timers, no writable disk, 4.5 MB request/response cap.
   isServerless: Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME),

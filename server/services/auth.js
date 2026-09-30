@@ -1,13 +1,15 @@
 import crypto from 'node:crypto';
 import { promisify } from 'node:util';
 import { db } from '../db/index.js';
+import { TENANT_TABLES, claimOrphans } from '../db/schema.js';
 import { nowIso } from '../lib/time.js';
-import { HttpError } from '../lib/validate.js';
+import { HttpError, isEmail } from '../lib/validate.js';
 import { getSetting } from './settings.js';
+import { createApiKey } from './apikeys.js';
 
-/** Session lifetime in days, from Account → Security (1–365). */
-async function sessionDays() {
-  const { session_days } = await getSetting('security');
+/** Session lifetime in days, from the account's Account → Security (1–365). */
+async function sessionDays(uid) {
+  const { session_days } = await getSetting(uid, 'security');
   return Math.min(365, Math.max(1, Math.round(Number(session_days)) || 14));
 }
 
@@ -40,28 +42,59 @@ export function validateUsername(username) {
   }
 }
 
+export function normalizeAccountEmail(email) {
+  const e = String(email || '').trim().toLowerCase();
+  if (e && !isEmail(e)) throw new HttpError(400, 'Enter a valid email address.');
+  return e || null;
+}
+
 const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
 
 export async function userCount() {
   return Number((await db.one('SELECT COUNT(*) AS n FROM pm_users')).n);
 }
 
-export async function createUser(username, password, displayName = '') {
+/**
+ * Create an account: its own portfolio, settings and a first API key. The first account on the
+ * server becomes the platform admin and takes over any unowned (pre-accounts) content.
+ */
+export async function createUser(username, password, displayName = '', { email = '', isAdmin = false } = {}) {
   validateUsername(username);
   validatePassword(password);
+  const mail = normalizeAccountEmail(email);
   const exists = await db.one('SELECT id FROM pm_users WHERE LOWER(username) = LOWER(?)', [username]);
   if (exists) throw new HttpError(409, 'That username is already taken.');
-  const { rows } = await db.run(
-    'INSERT INTO pm_users (username, display_name, password_hash, created_at) VALUES (?, ?, ?, ?) RETURNING id',
-    [username, displayName || username, await hashPassword(password), nowIso()]
-  );
-  return rows[0].id;
+  if (mail && (await db.one('SELECT id FROM pm_users WHERE email = ?', [mail]))) {
+    throw new HttpError(409, 'An account with that email already exists.');
+  }
+  const passwordHash = await hashPassword(password);
+  const id = await db.tx(async (t) => {
+    const first = Number((await t.one('SELECT COUNT(*) AS n FROM pm_users')).n) === 0;
+    const { rows } = await t.run(
+      'INSERT INTO pm_users (username, display_name, email, is_admin, password_hash, created_at) VALUES (?, ?, ?, ?, ?, ?) RETURNING id',
+      [username, displayName || username, mail, isAdmin || first ? 1 : 0, passwordHash, nowIso()]
+    );
+    const uid = rows[0].id;
+    if (first) await claimOrphans(t, uid);
+    await createApiKey(uid, 'Default', t);
+    return uid;
+  });
+  return id;
+}
+
+/** Permanently delete an account and everything it owns. */
+export async function deleteAccount(uid) {
+  await db.tx(async (t) => {
+    for (const table of TENANT_TABLES) await t.run(`DELETE FROM ${table} WHERE user_id = ?`, [uid]);
+    await t.run('DELETE FROM pm_sessions WHERE user_id = ?', [uid]);
+    await t.run('DELETE FROM pm_users WHERE id = ?', [uid]);
+  });
 }
 
 export async function createSession(userId, { ip, userAgent }) {
   const token = crypto.randomBytes(32).toString('base64url');
   const now = new Date();
-  const expires = new Date(now.getTime() + (await sessionDays()) * 86_400_000);
+  const expires = new Date(now.getTime() + (await sessionDays(userId)) * 86_400_000);
   await db.run(
     'INSERT INTO pm_sessions (token_hash, user_id, ip, user_agent, created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
     [sha256(token), userId, ip, String(userAgent || '').slice(0, 300), now.toISOString(), now.toISOString(), expires.toISOString()]
@@ -73,11 +106,14 @@ export async function createSession(userId, { ip, userAgent }) {
 export async function resolveSession(token) {
   if (!token || typeof token !== 'string' || token.length > 100) return null;
   const row = await db.one(
-    `SELECT s.id AS session_id, s.expires_at, s.last_seen_at, u.id, u.username, u.display_name, u.created_at, u.last_login_at
+    `SELECT s.id AS session_id, s.expires_at, s.last_seen_at, u.id, u.username, u.display_name, u.email, u.is_admin, u.disabled,
+            u.created_at, u.last_login_at
      FROM pm_sessions s JOIN pm_users u ON u.id = s.user_id WHERE s.token_hash = ?`,
     [sha256(token)]
   );
   if (!row) return null;
+  if (row.disabled) return null;
+  row.is_admin = Boolean(row.is_admin);
   if (new Date(row.expires_at) < new Date()) {
     await db.run('DELETE FROM pm_sessions WHERE id = ?', [row.session_id]);
     return null;

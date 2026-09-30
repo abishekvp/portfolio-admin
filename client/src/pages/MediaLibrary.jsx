@@ -78,6 +78,7 @@ export default function MediaLibrary() {
       <PageHeader
         title="Media library"
         description="Images and documents are stored in the database as binary data. Images are converted to WebP, resized and stripped of EXIF/GPS metadata."
+        children={data?.storage && <StorageMeter {...data.storage} />}
         actions={
           <>
             <Button icon={Wand2} onClick={purge} disabled={!unusedCount}>Remove unused ({unusedCount})</Button>
@@ -168,5 +169,18 @@ function MediaDetail({ media: m, onClose, onDelete, onSaveAlt, toast }) {
         )}
       </div>
     </Modal>
+  );
+}
+
+function StorageMeter({ used, limit }) {
+  if (!limit) return <p className="muted small">{formatBytes(used)} used</p>;
+  const pct = Math.min(100, Math.round((used / limit) * 100));
+  return (
+    <div className={cx('storage-meter', pct >= 90 && 'is-full')} style={{ marginTop: 10, maxWidth: 320 }}>
+      <div className="progress" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label="Storage used">
+        <div style={{ width: `${pct}%` }} />
+      </div>
+      <span className="muted small">{formatBytes(used)} of {formatBytes(limit)} used</span>
+    </div>
   );
 }

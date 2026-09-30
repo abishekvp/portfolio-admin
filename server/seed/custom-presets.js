@@ -62,19 +62,19 @@ export const CUSTOM_PRESETS = {
   },
 };
 
-export async function applyCustomPreset(id, { overwrite = false } = {}) {
+export async function applyCustomPreset(uid, id, { overwrite = false } = {}) {
   const preset = CUSTOM_PRESETS[id];
   if (!preset) throw new HttpError(404, 'Unknown preset');
   const spec = resources.custom_content;
   let added = 0;
   let updated = 0;
   for (const entry of preset.entries) {
-    const existing = await db.one('SELECT id FROM pm_custom_content WHERE group_key = ? AND key = ?', [entry.group_key, entry.key]);
+    const existing = await db.one('SELECT id FROM pm_custom_content WHERE user_id = ? AND group_key = ? AND key = ?', [uid, entry.group_key, entry.key]);
     if (!existing) {
-      await createItem(spec, { ...entry, schema: entry.schema || [], visible: true });
+      await createItem(uid, spec, { ...entry, schema: entry.schema || [], visible: true });
       added++;
     } else if (overwrite) {
-      await updateItem(spec, existing.id, { ...entry, schema: entry.schema || [] });
+      await updateItem(uid, spec, existing.id, { ...entry, schema: entry.schema || [] });
       updated++;
     }
   }

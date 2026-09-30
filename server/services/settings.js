@@ -1,5 +1,5 @@
 /**
- * Singleton records stored as JSON in pm_settings: the personal profile, skill category
+ * Per-account singleton records stored as JSON in pm_account_settings: the personal profile, skill category
  * metadata, SEO and operational settings. Template-specific texts live in the
  * custom_content collection instead.
  *
@@ -133,14 +133,14 @@ function hydrate(key, raw) {
   return merge(merge(blank(def.template), def.defaults), stored);
 }
 
-export async function getSetting(key) {
+export async function getSetting(uid, key) {
   if (!SETTINGS[key]) throw new HttpError(404, 'Unknown settings section');
-  const row = await db.one('SELECT value FROM pm_settings WHERE key = ?', [key]);
+  const row = await db.one('SELECT value FROM pm_account_settings WHERE user_id = ? AND key = ?', [uid, key]);
   return hydrate(key, row?.value);
 }
 
-export async function getAllSettings({ publicOnly = false } = {}) {
-  const rows = new Map((await db.all('SELECT key, value FROM pm_settings')).map((r) => [r.key, r.value]));
+export async function getAllSettings(uid, { publicOnly = false } = {}) {
+  const rows = new Map((await db.all('SELECT key, value FROM pm_account_settings WHERE user_id = ?', [uid])).map((r) => [r.key, r.value]));
   const out = {};
   for (const key of Object.keys(SETTINGS)) {
     if (publicOnly && !SETTINGS[key].public) continue;
@@ -149,10 +149,10 @@ export async function getAllSettings({ publicOnly = false } = {}) {
   return out;
 }
 
-export async function setSetting(key, input, { partial = true } = {}) {
+export async function setSetting(uid, key, input, { partial = true } = {}) {
   const def = SETTINGS[key];
   if (!def) throw new HttpError(404, 'Unknown settings section');
-  const current = await getSetting(key);
+  const current = await getSetting(uid, key);
   const candidate = partial ? merge(current, input) : input;
   const errors = {};
   const value = sanitize(def.template, candidate, '', errors);
@@ -160,16 +160,16 @@ export async function setSetting(key, input, { partial = true } = {}) {
   const json = JSON.stringify(value);
   if (json.length > 500_000) throw new HttpError(413, 'Settings payload is too large');
   await db.run(
-    `INSERT INTO pm_settings (key, value, updated_at) VALUES (?, ?, ?)
-     ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-    [key, json, nowIso()]
+    `INSERT INTO pm_account_settings (user_id, key, value, updated_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT (user_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    [uid, key, json, nowIso()]
   );
-  if (def.public) await bumpContentVersion();
+  if (def.public) await bumpContentVersion(uid);
   return value;
 }
 
 /** Media ids referenced from settings (for usage tracking). */
-export async function settingsMediaRefs() {
+export async function settingsMediaRefs(uid) {
   const refs = [];
   const walk = (node, path) => {
     if (!node || typeof node !== 'object') return;
@@ -178,25 +178,21 @@ export async function settingsMediaRefs() {
       else if (typeof v === 'object') walk(v, `${path}.${k}`);
     }
   };
-  const all = await getAllSettings();
+  const all = await getAllSettings(uid);
   for (const [key, value] of Object.entries(all)) walk(value, key);
   return refs;
 }
 
 // ---- content version (drives the public bundle cache / SDK revalidation) ----
-// Always read from the database so every serverless instance agrees on it.
+// One per account, always read from the database so every serverless instance agrees on it.
 
-export async function getContentVersion() {
-  const row = await db.one("SELECT value FROM pm_meta WHERE key = 'content_version'");
-  return row?.value || bumpContentVersion();
+export async function getContentVersion(uid) {
+  const row = await db.one('SELECT content_version FROM pm_users WHERE id = ?', [uid]);
+  return row?.content_version || bumpContentVersion(uid);
 }
 
-export async function bumpContentVersion() {
+export async function bumpContentVersion(uid) {
   const version = `${Date.now().toString(36)}${crypto.randomBytes(3).toString('hex')}`;
-  await db.run(
-    `INSERT INTO pm_meta (key, value) VALUES ('content_version', ?)
-     ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
-    [version]
-  );
+  await db.run('UPDATE pm_users SET content_version = ? WHERE id = ?', [version, uid]);
   return version;
 }

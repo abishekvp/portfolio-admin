@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
   Activity, Award, BarChart3, Blocks, Briefcase, Code2, Contact, Database, FolderKanban, GraduationCap, Image, LayoutDashboard,
-  LogOut, Mail, Menu, MessageSquareQuote, Moon, Plug, Search, Settings2, ShieldAlert, StickyNote, Sun, UserRound, X,
+  LogOut, Mail, Menu, MessageSquareQuote, Moon, Plug, Search, Settings2, ShieldAlert, StickyNote, Sun, UserRound, Users, X,
 } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
@@ -36,10 +36,13 @@ const NAV = [
   ] },
   { group: 'Settings', items: [
     { to: '/site', label: 'Site & SEO', icon: Search },
-    { to: '/integration', label: 'Integration', icon: Plug },
+    { to: '/integration', label: 'API keys & integration', icon: Plug },
     { to: '/backup', label: 'Backup & restore', icon: Database },
     { to: '/activity', label: 'Activity log', icon: Activity },
     { to: '/account', label: 'Account', icon: Settings2 },
+  ] },
+  { group: 'Platform', admin: true, items: [
+    { to: '/accounts', label: 'Accounts', icon: Users },
   ] },
 ];
 
@@ -96,7 +99,7 @@ export function Layout() {
           </button>
         </div>
         <nav className="nav">
-          {NAV.map((g) => (
+          {NAV.filter((g) => !g.admin || user?.is_admin).map((g) => (
             <div key={g.group} className="nav-group">
               <div className="nav-group-label">{g.group}</div>
               {g.items.map((it) => (

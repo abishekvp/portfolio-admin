@@ -2,9 +2,10 @@
  * Binary media store. Uploads arrive either as multipart files or as base64 data-URI
  * strings; both are decoded to a Buffer, sniffed by magic bytes (never trusting the
  * client's MIME type), re-encoded with sharp (auto-orient, resize, strip EXIF/GPS)
- * and stored in pm_media.data.
+ * and stored in pm_media.data. Media belongs to one account; every lookup is scoped by it.
  */
 import crypto from 'node:crypto';
+import { config } from '../config.js';
 import { db } from '../db/index.js';
 import { HttpError } from '../lib/validate.js';
 import { nowIso } from '../lib/time.js';
@@ -67,11 +68,27 @@ async function processImage(buffer, mime, presetName = 'default') {
   }
 }
 
+/** Bytes of media stored by an account. */
+export async function storageUsed(uid) {
+  return Number((await db.one('SELECT COALESCE(SUM(size), 0) AS n FROM pm_media WHERE user_id = ?', [uid]))?.n || 0);
+}
+
+async function storageLimit(uid) {
+  if (!config.accountStorageBytes) return 0;
+  const user = await db.one('SELECT is_admin FROM pm_users WHERE id = ?', [uid]);
+  return user?.is_admin ? 0 : config.accountStorageBytes;
+}
+
+export async function storageInfo(uid) {
+  return { used: await storageUsed(uid), limit: await storageLimit(uid) };
+}
+
 /**
- * Store a file. `accept` limits the allowed kinds ('image' | 'document' | 'any').
+ * Store a file for account `uid`. `accept` limits the allowed kinds ('image' | 'document' | 'any').
  * Returns the media row without binary data.
  */
-export async function storeMedia(buffer, { filename = '', accept = 'any', preset = 'default', source = 'admin', alt = '' } = {}) {
+export async function storeMedia(uid, buffer, { filename = '', accept = 'any', preset = 'default', source = 'admin', alt = '' } = {}) {
+  if (!uid) throw new Error('storeMedia: account id is required');
   if (!buffer || !buffer.length) throw new HttpError(400, 'Empty file');
   const sniffed = sniffMime(buffer);
   const isImage = IMAGE_MIMES.includes(sniffed);
@@ -83,37 +100,46 @@ export async function storeMedia(buffer, { filename = '', accept = 'any', preset
   const processed = isImage ? await processImage(buffer, sniffed, preset) : { data: buffer, mime: sniffed, width: null, height: null };
   const sha256 = crypto.createHash('sha256').update(processed.data).digest('hex');
 
-  // De-duplicate identical uploads.
-  const existing = await db.one('SELECT id, filename, mime, size, width, height, sha256, alt, source, created_at FROM pm_media WHERE sha256 = ?', [sha256]);
+  // De-duplicate identical uploads within the account.
+  const existing = await db.one('SELECT id, filename, mime, size, width, height, sha256, alt, source, created_at FROM pm_media WHERE user_id = ? AND sha256 = ?', [uid, sha256]);
   if (existing) return existing;
+
+  const limit = await storageLimit(uid);
+  if (limit && (await storageUsed(uid)) + processed.data.length > limit) {
+    throw new HttpError(413, `Storage limit reached (${Math.round(limit / 1024 / 1024)} MB). Delete unused media to free up space.`);
+  }
 
   let name = String(filename || '').replace(/[^\w.\- ]+/g, '').trim().slice(0, 120) || (isImage ? 'image' : 'document');
   if (processed.mime === 'image/webp') name = name.replace(/\.[a-z0-9]+$/i, '') + '.webp';
   else if (isDoc && !/\.pdf$/i.test(name)) name += '.pdf';
 
   const { rows } = await db.run(
-    `INSERT INTO pm_media (filename, mime, size, width, height, sha256, alt, source, data, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, filename, mime, size, width, height, sha256, alt, source, created_at`,
-    [name, processed.mime, processed.data.length, processed.width, processed.height, sha256, String(alt).slice(0, 300), source, processed.data, nowIso()]
+    `INSERT INTO pm_media (user_id, filename, mime, size, width, height, sha256, alt, source, data, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, filename, mime, size, width, height, sha256, alt, source, created_at`,
+    [uid, name, processed.mime, processed.data.length, processed.width, processed.height, sha256, String(alt).slice(0, 300), source, processed.data, nowIso()]
   );
   return rows[0];
 }
 
-export async function getMediaMeta(ids) {
+export async function getMediaMeta(uid, ids) {
   const list = [...new Set(ids.filter((id) => Number.isFinite(id) && id > 0))];
   if (!list.length) return new Map();
   const rows = await db.all(
-    `SELECT id, filename, mime, size, width, height, sha256 FROM pm_media WHERE id IN (${list.map(() => '?').join(',')})`,
-    list
+    `SELECT id, filename, mime, size, width, height, sha256 FROM pm_media WHERE user_id = ? AND id IN (${list.map(() => '?').join(',')})`,
+    [uid, ...list]
   );
   return new Map(rows.map((r) => [Number(r.id), r]));
 }
 
-export async function getMediaData(ids) {
+export async function getMediaData(uid, ids) {
   const list = [...new Set(ids)];
   if (!list.length) return new Map();
-  const rows = await db.all(`SELECT id, mime, data FROM pm_media WHERE id IN (${list.map(() => '?').join(',')})`, list);
+  const rows = await db.all(`SELECT id, mime, data FROM pm_media WHERE user_id = ? AND id IN (${list.map(() => '?').join(',')})`, [uid, ...list]);
   return new Map(rows.map((r) => [Number(r.id), { mime: r.mime, data: db.toBuffer(r.data) }]));
 }
 
-export const mediaPath = (row) => `/api/media/${row.id}/${encodeURIComponent(row.filename || 'file')}`;
+/**
+ * Public media URL. The hash segment makes URLs unguessable, so one account's files cannot be
+ * enumerated by id (the old /api/media/:id/:name form only works for the default site).
+ */
+export const mediaPath = (row) => `/api/media/${row.id}/${String(row.sha256 || '').slice(0, 16)}/${encodeURIComponent(row.filename || 'file')}`;

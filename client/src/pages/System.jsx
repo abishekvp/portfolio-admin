@@ -1,10 +1,10 @@
 import { useRef, useState } from 'react';
-import { Copy, Download, LogOut, Upload } from 'lucide-react';
+import { Copy, Download, KeyRound, LogOut, Plus, RefreshCw, Trash2, Upload } from 'lucide-react';
 import { api, copyText, formatDate, timeAgo } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
 import { SettingsForm } from '../components/SettingsForm.jsx';
 import { Field } from '../components/Fields.jsx';
-import { Badge, Button, Card, PageHeader, Spinner, Toggle, useConfirm, useFetch, useToast } from '../components/ui.jsx';
+import { Badge, Button, Card, Empty, PageHeader, Spinner, Toggle, useConfirm, useFetch, useToast } from '../components/ui.jsx';
 
 export function SiteSettings() {
   return (
@@ -29,19 +29,112 @@ function CopyBlock({ label, value }) {
   );
 }
 
+function ApiKeys({ keys, reload }) {
+  const toast = useToast();
+  const confirm = useConfirm();
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function create(e) {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      await api.post('/api/admin/keys', { name: name || 'API key' });
+      setName('');
+      toast.success('API key created');
+      reload();
+    } catch (err) {
+      toast.error(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function roll(k) {
+    const ok = await confirm({
+      title: `Rotate “${k.name}”?`,
+      message: 'A new key replaces this one. The old key stops working immediately, so update every site that uses it.',
+      confirmLabel: 'Rotate key',
+    });
+    if (!ok) return;
+    await api.post(`/api/admin/keys/${k.id}/roll`);
+    toast.success('Key rotated');
+    reload();
+  }
+
+  async function remove(k) {
+    const ok = await confirm({
+      title: `Revoke “${k.name}”?`,
+      message: 'Sites using this key will stop loading your portfolio. This cannot be undone.',
+      confirmLabel: 'Revoke key',
+    });
+    if (!ok) return;
+    await api.del(`/api/admin/keys/${k.id}`);
+    toast.success('Key revoked');
+    reload();
+  }
+
+  return (
+    <Card
+      title="API keys"
+      description="A key identifies your portfolio. It is publishable: it goes into your website and only reads public content or submits the visitor forms. Use one per site so you can revoke them separately."
+    >
+      {keys.length ? (
+        <ul className="key-list">
+          {keys.map((k) => (
+            <li key={k.id}>
+              <div className="key-head">
+                <strong>{k.name}</strong>
+                <span className="muted small">{k.last_used_at ? `used ${timeAgo(k.last_used_at)}` : 'never used'} · created {timeAgo(k.created_at)}</span>
+              </div>
+              <CopyBlock value={k.token} />
+              <div className="key-actions">
+                <Button size="sm" icon={RefreshCw} onClick={() => roll(k)}>Rotate</Button>
+                <Button size="sm" variant="ghost" icon={Trash2} onClick={() => remove(k)}>Revoke</Button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <Empty icon={KeyRound} title="No API keys">Create a key to connect your website.</Empty>
+      )}
+      <form onSubmit={create} className="inline-form" style={{ marginTop: 14 }}>
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Key name, e.g. my-site.com" aria-label="New key name" maxLength={60} />
+        <Button type="submit" icon={Plus} loading={busy}>New key</Button>
+      </form>
+    </Card>
+  );
+}
+
 export function Integration() {
-  const { data, loading } = useFetch('/api/admin/integration');
-  if (loading || !data) return <Spinner block />;
+  const { data, loading, reload } = useFetch('/api/admin/integration');
+  const [selected, setSelected] = useState(null);
+  if (loading && !data) return <Spinner block />;
+  const keys = data.keys || [];
+  const key = keys.find((k) => k.id === selected) || keys[0];
+  const token = key?.token || 'pk_your_key';
+  const snippet = `<script src="${data.sdk_url}" data-key="${token}" async></script>`;
+  const bundleUrl = data.endpoints.bundle.replace('?inline=1', '');
+  const withKey = (url) => `${url}${url.includes('?') ? '&' : '?'}key=${token}`;
+
   return (
     <div className="page page-narrow">
-      <PageHeader title="Integration" description="Connect your portfolio website to this admin." />
-      <Card title="1. Add the SDK to your portfolio" description="Paste into the <head> of the portfolio's index.html. It loads all content (including images) into sessionStorage, tracks visits and wires up the contact & testimonial forms.">
-        <CopyBlock value={data.snippet} />
+      <PageHeader title="Integration" description="Connect any website to your portfolio content with an API key." />
+      <ApiKeys keys={keys} reload={reload} />
+
+      {keys.length > 1 && (
+        <Field label="Show examples for" htmlFor="key-pick">
+          <select id="key-pick" value={key.id} onChange={(e) => setSelected(Number(e.target.value))}>
+            {keys.map((k) => <option key={k.id} value={k.id}>{k.name}</option>)}
+          </select>
+        </Field>
+      )}
+
+      <Card title="Option A: add the SDK" description="Paste into the <head> of your site's index.html. It loads all content (including images) into sessionStorage, tracks visits and wires up the contact and testimonial forms.">
+        <CopyBlock value={snippet} />
         <p className="muted small">
           Optional attributes: <code>data-cache-ttl="0"</code> (seconds to trust the cache before checking for changes; default 0 = every page load), <code>data-track="false"</code>, <code>data-inline-images="false"</code>, <code>data-seo="false"</code>.
         </p>
-      </Card>
-      <Card title="2. Read the data" description="The SDK exposes window.PortfolioManager.">
         <pre className="code">{`// Vue / React / vanilla
 PortfolioManager.onData((data) => {
   // Personal content: data.profile (incl. summary, photo_url, resume_url), data.contacts,
@@ -53,14 +146,26 @@ PortfolioManager.onData((data) => {
 // or listen for the DOM event (works even if the SDK loads after your app)
 window.addEventListener('portfolio:data', (e) => render(e.detail.data));`}</pre>
       </Card>
-      <Card title="3. Forms" description="Mark your forms; the SDK validates, submits and shows the server response (including the once-per-day limit message).">
+
+      <Card title="Option B: call the API" description="One request returns your whole portfolio as JSON. Send the key as ?key=, an X-Portfolio-Key header, or Authorization: Bearer.">
+        <CopyBlock label="curl" value={`curl -H "X-Portfolio-Key: ${token}" ${bundleUrl}`} />
+        <pre className="code">{`const res = await fetch('${bundleUrl}', {
+  headers: { 'X-Portfolio-Key': '${token}' },
+});
+const { version, data } = await res.json();
+// Cheap change check: GET ${data.endpoints.version} returns { version }.
+// Add ?since=<version> to the bundle URL and it answers { status: 'not_modified' } when nothing changed.`}</pre>
+      </Card>
+
+      <Card title="Forms" description="Mark your forms; the SDK validates, submits and shows the server response (including the once-per-day limit message).">
         <pre className="code">{`<form data-abishek-contact> name, email, subject, message … <div class="contact-response"></div></form>
 <form data-abishek-testimonial> name, email, role, company, content, <input type="file" name="photo"> …
   <div class="testimonial-response"></div></form>`}</pre>
       </Card>
-      <Card title="Endpoints">
+
+      <Card title="Endpoints" description="All public endpoints take the same key.">
         {Object.entries(data.endpoints).map(([k, v]) => (
-          <CopyBlock key={k} label={k} value={v} />
+          <CopyBlock key={k} label={k} value={withKey(v)} />
         ))}
       </Card>
     </div>
@@ -101,7 +206,7 @@ export function Backup() {
 
   return (
     <div className="page page-narrow">
-      <PageHeader title="Backup & restore" description="A backup is a single JSON file with all content, custom content, notes, settings and media (as base64). Admin accounts are not included." />
+      <PageHeader title="Backup & restore" description="A backup is a single JSON file with all of your content, custom content, notes, settings and media (as base64). Your login and API keys are not included. It can be restored into this or another account." />
       <Card title="Download backup">
         <div className="stack">
           <Toggle checked={includeMessages} onChange={setIncludeMessages} label="Include contact messages" />
@@ -116,8 +221,8 @@ export function Backup() {
       </Card>
       <Card title="Restore">
         <p className="muted">
-          Replaces current content with a backup file created by this admin. On Vercel, uploads are limited to 4.5 MB — for larger
-          backups run <code>npm run restore -- backup.json</code> locally with <code>DATABASE_URL</code> pointing at the production database.
+          Replaces your current content with a backup file created by this admin (from any account). On Vercel, uploads are limited to 4.5 MB — for larger
+          backups run <code>npm run restore -- backup.json --user=&lt;username&gt;</code> locally with <code>DATABASE_URL</code> pointing at the production database.
         </p>
         <input ref={file} type="file" accept="application/json,.json" hidden onChange={(e) => restore(e.target.files?.[0])} />
         <Button icon={Upload} loading={busy} onClick={() => file.current?.click()}>Choose backup file…</Button>
@@ -169,15 +274,37 @@ export function Account() {
   const { user, refresh } = useAuth();
   const toast = useToast();
   const sessions = useFetch('/api/auth/sessions');
-  const [displayName, setDisplayName] = useState(user?.display_name || '');
+  const [profile, setProfile] = useState({ display_name: user?.display_name || '', email: user?.email || '' });
   const [pw, setPw] = useState({ current_password: '', new_password: '', confirm: '' });
   const [busy, setBusy] = useState(false);
+  const [deletePw, setDeletePw] = useState('');
+  const confirm = useConfirm();
 
-  async function saveName(e) {
+  async function saveProfile(e) {
     e.preventDefault();
-    await api.put('/api/auth/profile', { display_name: displayName });
-    await refresh();
-    toast.success('Display name updated');
+    try {
+      await api.put('/api/auth/profile', profile);
+      await refresh();
+      toast.success('Account details updated');
+    } catch (err) {
+      toast.error(err);
+    }
+  }
+
+  async function deleteAccount(e) {
+    e.preventDefault();
+    const ok = await confirm({
+      title: 'Delete your account?',
+      message: 'Your portfolio content, media, messages, analytics and API keys are deleted permanently, and sites using your keys stop working. Download a backup first if you might need it.',
+      confirmLabel: 'Delete account',
+    });
+    if (!ok) return;
+    try {
+      await api.post('/api/auth/delete-account', { password: deletePw });
+      await refresh();
+    } catch (err) {
+      toast.error(err);
+    }
   }
 
   async function changePassword(e) {
@@ -210,10 +337,17 @@ export function Account() {
   return (
     <div className="page page-narrow">
       <PageHeader title="Account" description={`Signed in as ${user?.username}`} />
-      <Card title="Profile">
-        <form onSubmit={saveName} className="inline-form">
-          <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Display name" aria-label="Display name" />
-          <Button type="submit">Save</Button>
+      <Card title="Account details" description="Your sign-in details. Your public portfolio profile is edited under Profile.">
+        <form onSubmit={saveProfile} className="form-grid">
+          <Field label="Display name">
+            <input value={profile.display_name} onChange={(e) => setProfile({ ...profile, display_name: e.target.value })} autoComplete="name" />
+          </Field>
+          <Field label="Email" help="You can sign in with it instead of your username.">
+            <input type="email" value={profile.email} onChange={(e) => setProfile({ ...profile, email: e.target.value })} autoComplete="email" />
+          </Field>
+          <div className="form-footer field-full">
+            <Button type="submit">Save</Button>
+          </div>
         </form>
       </Card>
       <Card title="Change password" description="At least 10 characters. Changing it signs out every other session.">
@@ -249,6 +383,12 @@ export function Account() {
             ))}
           </ul>
         )}
+      </Card>
+      <Card title="Delete account" className="danger-zone" description="Permanently deletes your account, your portfolio content and media, messages, analytics and API keys.">
+        <form onSubmit={deleteAccount} className="inline-form">
+          <input type="password" autoComplete="current-password" value={deletePw} onChange={(e) => setDeletePw(e.target.value)} placeholder="Current password" aria-label="Current password" required />
+          <Button type="submit" variant="danger" icon={Trash2}>Delete account</Button>
+        </form>
       </Card>
     </div>
   );

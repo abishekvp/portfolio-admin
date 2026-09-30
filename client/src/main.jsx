@@ -18,6 +18,7 @@ import MediaLibrary from './pages/MediaLibrary.jsx';
 import Notes from './pages/Notes.jsx';
 import CustomContent from './pages/CustomContent.jsx';
 import Limits from './pages/Limits.jsx';
+import Accounts from './pages/Accounts.jsx';
 import { Account, ActivityLog, Backup, Integration, SiteSettings } from './pages/System.jsx';
 import { PageHeader } from './components/ui.jsx';
 
@@ -55,6 +56,7 @@ function App() {
         <Route path="backup" element={<Backup />} />
         <Route path="activity" element={<ActivityLog />} />
         <Route path="account" element={<Account />} />
+        {auth.user?.is_admin && <Route path="accounts" element={<Accounts />} />}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
