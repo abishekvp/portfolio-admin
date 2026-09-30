@@ -29,7 +29,11 @@ export const config = {
   port: Number(process.env.PORT) || 4000,
 
   // Database: PostgreSQL when DATABASE_URL is set, otherwise an embedded SQLite file.
-  databaseUrl: process.env.DATABASE_URL || '',
+  // Vercel storage integrations may expose the direct URL as POSTGRES_URL (DATABASE_URL can be a
+  // prisma+postgres:// proxy URL that plain Postgres drivers cannot use), so take the first postgres:// one.
+  databaseUrl:
+    [process.env.DATABASE_URL, process.env.POSTGRES_URL, process.env.POSTGRES_URL_NON_POOLING]
+      .find((u) => /^postgres(ql)?:\/\//i.test(u || '')) || '',
   databaseSsl: (process.env.DATABASE_SSL || '').toLowerCase(), // '', 'true', 'false', 'no-verify'
   sqlitePath: process.env.SQLITE_PATH || path.join(ROOT_DIR, 'data', 'portfolio.db'),
 
