@@ -24,6 +24,26 @@ export const SETTINGS = {
     },
     defaults: { full_name: 'Your Name', headline: 'Software Engineer', resume_filename: 'Resume.pdf' },
   },
+  // Named download links: /api/download/<slug> serves the chosen media file. The slug
+  // `resume` also backs /api/resume (before falling back to profile.resume_id).
+  downloads: {
+    label: 'Download links',
+    public: true,
+    template: { links: [{ slug: '', label: '', media_id: null, filename: '' }] },
+    defaults: { links: [] },
+    validate(value, errors) {
+      const seen = new Set();
+      value.links = value.links.filter((l) => l.slug || l.media_id || l.label);
+      value.links.forEach((l, i) => {
+        l.slug = l.slug.toLowerCase();
+        if (!DOWNLOAD_SLUG.test(l.slug)) errors[`links[${i}].slug`] = 'Use 1–60 lowercase letters, numbers, - or _';
+        else if (seen.has(l.slug)) errors[`links[${i}].slug`] = 'Already used by another link';
+        seen.add(l.slug);
+        if (!l.media_id) errors[`links[${i}].media_id`] = 'Choose a file';
+        l.filename = l.filename.replace(/[^\w.\- ]+/g, '').slice(0, 120);
+      });
+    },
+  },
   skills_meta: {
     label: 'Skill categories',
     public: true,
@@ -70,6 +90,7 @@ export const SETTINGS = {
   },
 };
 
+export const DOWNLOAD_SLUG = /^[a-z0-9][a-z0-9_-]{0,59}$/;
 const MAX_STRING = 10000;
 const MAX_LIST = 200;
 const isUrlKey = (key) => /(_url|_href|^link|^url|^href)$/.test(key);
@@ -156,6 +177,7 @@ export async function setSetting(uid, key, input, { partial = true } = {}) {
   const candidate = partial ? merge(current, input) : input;
   const errors = {};
   const value = sanitize(def.template, candidate, '', errors);
+  def.validate?.(value, errors);
   if (Object.keys(errors).length) throw new HttpError(400, 'Please fix the highlighted fields.', errors);
   const json = JSON.stringify(value);
   if (json.length > 500_000) throw new HttpError(413, 'Settings payload is too large');

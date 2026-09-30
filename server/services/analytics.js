@@ -1,7 +1,7 @@
 import { db } from '../db/index.js';
 import { dayKey, formatDuration, lastDays, nowIso } from '../lib/time.js';
 import { getSetting } from './settings.js';
-import { normalizeIp } from './limits.js';
+import { ipListed, normalizeIp } from './limits.js';
 
 const EVENT_TYPES = new Set(['pageview', 'time_spent', 'resume_download', 'section_view', 'outbound_click', 'custom']);
 const BOT_RE = /bot|crawl|spider|slurp|facebookexternalhit|headless|lighthouse|pingdom|monitor|curl|wget|python-requests|axios|node-fetch/i;
@@ -38,12 +38,14 @@ function refHost(referrer) {
   }
 }
 
-export async function collectEvent(uid, payload, { ip, userAgent }) {
+export async function collectEvent(uid, payload, { ip, userAgent, country = '', location = '', origin = '' }) {
   const settings = await getSetting(uid, 'analytics');
   if (!settings.enabled) return { skipped: 'disabled' };
   if (BOT_RE.test(userAgent || '')) return { skipped: 'bot' };
   const nip = normalizeIp(ip);
-  if (settings.ignore_ips.some((x) => x && (x === ip || x === nip))) return { skipped: 'ignored' };
+  if (ipListed(settings.ignore_ips, ip)) return { skipped: 'ignored' };
+  // Blocked visitors (Spam & limits) are left out of the stats too.
+  if (ipListed((await getSetting(uid, 'submissions')).blocked_ips, ip)) return { skipped: 'blocked' };
 
   const sessionId = str(payload.session_id, 64).replace(/[^\w-]/g, '') || `anon_${Date.now().toString(36)}`;
   const eventType = EVENT_TYPES.has(payload.event_type) ? payload.event_type : 'custom';
@@ -57,10 +59,10 @@ export async function collectEvent(uid, payload, { ip, userAgent }) {
   const device = ['desktop', 'mobile', 'tablet'].includes(payload.device_type) ? payload.device_type : client.device;
 
   await db.run(
-    `INSERT INTO pm_visitor_sessions (user_id, session_id, ip, user_agent, device_type, browser, os, referrer, landing_path, day, first_seen, last_seen, duration_seconds)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+    `INSERT INTO pm_visitor_sessions (user_id, session_id, ip, user_agent, device_type, browser, os, referrer, landing_path, country, location, origin, day, first_seen, last_seen, duration_seconds)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
      ON CONFLICT (user_id, session_id) DO UPDATE SET last_seen = excluded.last_seen`,
-    [uid, sessionId, nip, str(userAgent, 500), device, client.browser, client.os, referrer, path, day, now, now]
+    [uid, sessionId, nip, str(userAgent, 500), device, client.browser, client.os, referrer, path, str(country, 8), str(location, 200), str(origin, 200), day, now, now]
   );
 
   if (eventType === 'time_spent') {
@@ -132,7 +134,7 @@ export async function summary(uid, rangeDays = 30) {
   const referrers = [...refCounts.entries()].map(([label, count]) => ({ label, count })).sort((a, b) => b.count - a.count).slice(0, 8);
 
   const recentEvents = (await db.all(
-    `SELECT e.event_type, e.path, e.created_at, s.device_type, s.browser, s.os FROM pm_analytics_events e
+    `SELECT e.event_type, e.path, e.referrer, e.created_at, s.ip, s.location, s.device_type, s.browser, s.os FROM pm_analytics_events e
      LEFT JOIN pm_visitor_sessions s ON s.user_id = e.user_id AND s.session_id = e.session_id
      WHERE e.user_id = ? ORDER BY e.id DESC LIMIT 15`,
     [uid]
@@ -151,8 +153,32 @@ export async function summary(uid, rangeDays = 30) {
     top_pages: topPages,
     referrers,
     recent_events: recentEvents,
+    countries: await group('country'),
     updated_at: nowIso(),
   };
+}
+
+/**
+ * Recent visitor sessions with where they came from, newest first, for spotting and blocking
+ * unwanted traffic. `ip` filters to one (normalised) address.
+ */
+export async function recentVisitors(uid, { days = 30, limit = 100, ip = '' } = {}) {
+  const from = lastDays(Math.min(365, Math.max(1, days)))[0];
+  const params = [uid, from];
+  let where = 's.user_id = ? AND s.day >= ?';
+  if (ip) {
+    where += ' AND s.ip = ?';
+    params.push(normalizeIp(ip));
+  }
+  const rows = await db.all(
+    `SELECT s.session_id, s.ip, s.user_agent, s.device_type, s.browser, s.os, s.referrer, s.landing_path, s.country, s.location, s.origin,
+            s.first_seen, s.last_seen, s.duration_seconds,
+            (SELECT COUNT(*) FROM pm_analytics_events e WHERE e.user_id = s.user_id AND e.session_id = s.session_id AND e.event_type = 'pageview') AS pageviews,
+            (SELECT COUNT(*) FROM pm_analytics_events e WHERE e.user_id = s.user_id AND e.session_id = s.session_id AND e.event_type = 'resume_download') AS downloads
+     FROM pm_visitor_sessions s WHERE ${where} ORDER BY s.last_seen DESC LIMIT ?`,
+    [...params, Math.min(500, Math.max(1, limit))]
+  );
+  return rows.map((r) => ({ ...r, pageviews: Number(r.pageviews), downloads: Number(r.downloads), referrer_host: refHost(r.referrer) }));
 }
 
 export async function purgeAnalytics(uid, olderThanDays) {

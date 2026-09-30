@@ -1,7 +1,9 @@
 import { useMemo, useRef, useState } from 'react';
-import { Copy, ExternalLink, FileText, Trash2, Upload, Wand2 } from 'lucide-react';
+import { Copy, ExternalLink, FileDown, FileText, Link2, Trash2, Upload, Wand2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { api, copyText, formatBytes, formatDate, uploadMedia } from '../lib/api.js';
-import { Badge, Button, Empty, Modal, PageHeader, Spinner, Tabs, cx, useConfirm, useFetch, useToast } from '../components/ui.jsx';
+import { Badge, Button, Empty, IconButton, Modal, PageHeader, Spinner, Tabs, cx, useConfirm, useFetch, useToast } from '../components/ui.jsx';
+import { SLUG_RE, toSlug, useDownloadBase } from './Downloads.jsx';
 
 export default function MediaLibrary() {
   const { data, loading, reload, setData } = useFetch('/api/admin/media');
@@ -122,12 +124,22 @@ export default function MediaLibrary() {
           ))}
         </div>
       )}
-      <MediaDetail media={detail} onClose={() => setDetail(null)} onDelete={remove} onSaveAlt={saveAlt} toast={toast} />
+      <MediaDetail
+        media={detail}
+        onClose={() => setDetail(null)}
+        onDelete={remove}
+        onSaveAlt={saveAlt}
+        onLinked={async () => {
+          const d = await reload();
+          if (d) setDetail((cur) => d.items.find((x) => x.id === cur?.id) || cur);
+        }}
+        toast={toast}
+      />
     </div>
   );
 }
 
-function MediaDetail({ media: m, onClose, onDelete, onSaveAlt, toast }) {
+function MediaDetail({ media: m, onClose, onDelete, onSaveAlt, onLinked, toast }) {
   const [alt, setAlt] = useState('');
   const [last, setLast] = useState(null);
   if (m !== last) {
@@ -158,6 +170,7 @@ function MediaDetail({ media: m, onClose, onDelete, onSaveAlt, toast }) {
           <dt>Uploaded</dt><dd>{formatDate(m.created_at)} {m.source === 'website' && <Badge>from website</Badge>}</dd>
           <dt>Used by</dt><dd>{m.used_by.length ? m.used_by.join(', ') : 'Not used'}</dd>
         </dl>
+        <DownloadLinks media={m} onLinked={onLinked} toast={toast} />
         {m.mime.startsWith('image/') && (
           <div className="field">
             <label className="field-label" htmlFor="alt">Alt text</label>
@@ -169,6 +182,72 @@ function MediaDetail({ media: m, onClose, onDelete, onSaveAlt, toast }) {
         )}
       </div>
     </Modal>
+  );
+}
+
+/** Map this file to a download link (e.g. /api/download/resume) or see which links serve it. */
+function DownloadLinks({ media: m, onLinked, toast }) {
+  const { data, setData } = useFetch('/api/admin/settings/downloads');
+  const urlFor = useDownloadBase();
+  const [slug, setSlug] = useState('');
+  const [busy, setBusy] = useState(false);
+  if (!data) return null;
+  const mine = data.links.filter((l) => l.media_id === m.id);
+  const target = data.links.find((l) => l.slug === slug);
+
+  async function link(e) {
+    e.preventDefault();
+    if (!SLUG_RE.test(slug)) return toast.error('Use lowercase letters, numbers, - or _ for the link name');
+    setBusy(true);
+    try {
+      const links = target ? data.links.map((l) => (l.slug === slug ? { ...l, media_id: m.id } : l)) : [...data.links, { slug, label: '', media_id: m.id, filename: '' }];
+      setData(await api.put('/api/admin/settings/downloads', { links }));
+      toast.success(`/api/download/${slug}${slug === 'resume' ? ' and /api/resume now serve' : ' now serves'} ${m.filename}`);
+      setSlug('');
+      onLinked?.();
+    } catch (err) {
+      toast.error(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="field">
+      <span className="field-label">Download links</span>
+      {mine.length > 0 && (
+        <ul className="download-mini">
+          {mine.map((l) => (
+            <li key={l.slug}>
+              <FileDown size={14} />
+              <span className="mono">/api/download/{l.slug}</span>
+              {l.slug === 'resume' && <Badge tone="accent">resume</Badge>}
+              <IconButton icon={Copy} label="Copy link" size={13} onClick={async () => (await copyText(urlFor(l.slug))) && toast.success('Link copied')} />
+            </li>
+          ))}
+        </ul>
+      )}
+      <form className="inline-form" onSubmit={link}>
+        <input
+          list="download-slugs"
+          value={slug}
+          placeholder={mine.length ? 'Add another link, e.g. cv' : 'Link name, e.g. resume'}
+          onChange={(e) => setSlug(toSlug(e.target.value))}
+          aria-label="Download link name"
+        />
+        <datalist id="download-slugs">
+          {data.links.filter((l) => l.media_id !== m.id).map((l) => <option key={l.slug} value={l.slug} />)}
+          {!data.links.some((l) => l.slug === 'resume') && <option value="resume" />}
+        </datalist>
+        <Button type="submit" icon={Link2} loading={busy} disabled={!slug || target?.media_id === m.id}>
+          {target ? 'Replace file' : 'Link'}
+        </Button>
+      </form>
+      <p className="field-help">
+        {target && target.media_id !== m.id ? `/api/download/${slug} will serve this file instead of its current one.` : 'Choose an existing link to swap its file, or type a new name. '}
+        <Link to="/downloads">Manage all downloads</Link>
+      </p>
+    </div>
   );
 }
 

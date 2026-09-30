@@ -95,6 +95,10 @@ The SDK loads `/api/portfolio?inline=1`: one bundle with profile, contacts, all 
 - The data is revalidated in the background with `?since=<version>`.
 - Events: `portfolio:data` and `PortfolioManager.onData(cb)`.
 
+**Download buttons.** Under *Library → Downloads* (or from a file in the Media library), map any uploaded file to a link name. `https://admin.abishek.in/api/download/<name>?key=pk_…` then always serves that file, and `/api/resume` serves the link named `resume`. The bundle lists them as `data.downloads.<name>` (`url`, `label`, `filename`, `mime`, `size`). Swapping the file never changes the URL.
+
+**Blocking IPs.** The Activity log, Analytics (*Recent visitors*) and message details show each request's IP address, browser and, on Vercel, location. Blocking an IP (or adding it under *Spam & limits*) stops it sending messages or testimonials and using download links, and leaves its visits out of analytics.
+
 The SDK also handles `<form data-abishek-contact>` and `<form data-abishek-testimonial>`. For the testimonial form, the photo is scaled down in the browser and sent as a base64 string. The server decodes it, checks the real file type, converts it to WebP, strips metadata and stores the binary in the database.
 
 ## Once-per-day submissions
@@ -119,7 +123,8 @@ Public endpoints (everything except `/api/auth`, `/api/admin`, `/api/platform`, 
 | POST | `/api/testimonials/submit` | Testimonial (JSON with base64 `photo`, or multipart) |
 | POST | `/api/analytics/collect` | Analytics event (`text/plain` JSON, beacon-friendly) |
 | GET | `/api/media/:id/:hash/:name` | Binary media (immutable cache) |
-| GET | `/api/resume` | Latest resume PDF |
+| GET | `/api/resume` | Resume: the file linked as `resume` under *Downloads*, else the Profile upload |
+| GET | `/api/download/:slug` | Any file mapped to a download link under *Downloads* (`?inline=1` to open instead of download) |
 | GET | `/api/portfolio_manager.js` | SDK |
 | GET | `/api/cron/daily` | Maintenance (Bearer `CRON_SECRET`) |
 | POST | `/api/auth/signup`, `/api/auth/login` | Create an account / sign in (username or email) |

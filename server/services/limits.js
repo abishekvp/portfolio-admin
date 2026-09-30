@@ -37,6 +37,13 @@ export function normalizeIp(ip) {
   return s || 'unknown';
 }
 
+/** Whether `ip` is in a block/ignore list (entries may be raw or normalised addresses). */
+export function ipListed(list, ip) {
+  if (!ip || !list?.length) return false;
+  const nip = normalizeIp(ip);
+  return list.some((x) => x && (x === ip || x === nip));
+}
+
 function expandIPv6(addr) {
   const [left, right = ''] = addr.split('::');
   const l = left ? left.split(':') : [];

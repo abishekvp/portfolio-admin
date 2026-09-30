@@ -113,7 +113,7 @@ export const resources = {
     fields: {
       title: f.string(255, { required: true }),
       description: f.text(3000),
-      icon: f.string(32, { default: '🏆' }),
+      icon: f.string(32),
       issuer: f.string(255),
       date_label: f.string(100),
       link: f.url(),

@@ -228,22 +228,25 @@ export function Repeater({ value, onChange, fields, itemLabel, addLabel = 'Add i
 
 // ------------------------------------------------------------------ media
 
-export function MediaPicker({ value, onChange, preset = 'default', accept = 'image', previewUrl }) {
+export function MediaPicker({ value, onChange, preset = 'default', accept = 'image', previewUrl, initialMeta = null }) {
   const toast = useToast();
   const input = useRef(null);
   const [busy, setBusy] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
-  const [meta, setMeta] = useState(null);
+  const [meta, setMeta] = useState(initialMeta);
 
   const url = value ? meta?.id === value ? meta.url : `/api/media/${value}` : previewUrl || '';
+  // accept: 'image', 'document' (PDF) or 'any' (either; used by download links)
+  const isAny = accept === 'any';
   const isImage = accept === 'image';
+  const showImage = isImage || (isAny && meta?.id === value && meta?.mime?.startsWith('image/'));
 
   async function handleFile(file) {
     if (!file) return;
     setBusy(true);
     try {
-      const media = await uploadMedia(file, { preset, accept: isImage ? 'image' : 'document' });
+      const media = await uploadMedia(file, { preset, accept: isImage || (isAny && file.type.startsWith('image/')) ? 'image' : 'document' });
       setMeta(media);
       onChange(media.id);
       toast.success(`Uploaded ${media.filename} (${formatBytes(media.size)})`);
@@ -269,10 +272,10 @@ export function MediaPicker({ value, onChange, preset = 'default', accept = 'ima
         handleFile(e.dataTransfer.files?.[0]);
       }}
     >
-      <div className={cx('media-preview', !isImage && 'is-doc')}>
+      <div className={cx('media-preview', !showImage && 'is-doc')}>
         {busy ? (
           <Spinner label="" />
-        ) : value && isImage ? (
+        ) : value && showImage ? (
           <img src={url} alt="" />
         ) : value ? (
           <FileText size={28} />
@@ -282,7 +285,9 @@ export function MediaPicker({ value, onChange, preset = 'default', accept = 'ima
       </div>
       <div className="media-meta">
         <div className="media-name">{value ? meta?.filename || `Media #${value}` : isImage ? 'No image selected' : 'No file selected'}</div>
-        <div className="muted small">{isImage ? 'JPG, PNG, WebP or GIF — converted to WebP and stored in the database' : 'PDF document'}</div>
+        <div className="muted small">
+          {isImage ? 'JPG, PNG, WebP or GIF — converted to WebP and stored in the database' : isAny ? (meta?.id === value && meta?.mime) || 'PDF or image' : 'PDF document'}
+        </div>
         <div className="media-actions">
           <Button type="button" size="sm" icon={Upload} onClick={() => input.current?.click()} disabled={busy}>
             Upload
@@ -292,7 +297,7 @@ export function MediaPicker({ value, onChange, preset = 'default', accept = 'ima
           </Button>
           {value && (
             <>
-              {!isImage && (
+              {!showImage && (
                 <a className="btn btn-ghost btn-sm" href={url} target="_blank" rel="noreferrer">
                   View
                 </a>
@@ -304,10 +309,10 @@ export function MediaPicker({ value, onChange, preset = 'default', accept = 'ima
           )}
         </div>
       </div>
-      <input ref={input} type="file" hidden accept={isImage ? 'image/*' : 'application/pdf'} onChange={(e) => handleFile(e.target.files?.[0])} />
+      <input ref={input} type="file" hidden accept={isImage ? 'image/*' : isAny ? 'image/*,application/pdf' : 'application/pdf'} onChange={(e) => handleFile(e.target.files?.[0])} />
       <MediaLibraryModal
         open={libraryOpen}
-        kind={isImage ? 'image' : 'document'}
+        kind={isImage ? 'image' : isAny ? '' : 'document'}
         onClose={() => setLibraryOpen(false)}
         onSelect={(m) => {
           setMeta(m);
@@ -326,7 +331,7 @@ export function MediaLibraryModal({ open, onClose, onSelect, kind }) {
       {loading ? (
         <Spinner block />
       ) : !data?.items?.length ? (
-        <p className="muted">No {kind === 'image' ? 'images' : 'documents'} uploaded yet.</p>
+        <p className="muted">No {kind === 'image' ? 'images' : kind ? 'documents' : 'files'} uploaded yet.</p>
       ) : (
         <div className="media-grid media-grid-select">
           {data.items.map((m) => (

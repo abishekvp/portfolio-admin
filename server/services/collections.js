@@ -6,6 +6,7 @@ import { db } from '../db/index.js';
 import { mediaFieldNames } from '../resources.js';
 import { HttpError, rowToJson, toDbValue, validateInput } from '../lib/validate.js';
 import { nowIso } from '../lib/time.js';
+import { currentSource } from '../lib/requestContext.js';
 import { getMediaMeta, mediaPath } from './media.js';
 import { bumpContentVersion } from './settings.js';
 import { hooks } from './hooks.js';
@@ -139,9 +140,15 @@ export async function reorderItems(uid, spec, ids) {
 /** Record an action in the acting account's activity log. */
 export async function logActivity(user, action, entity, entityId, summary) {
   try {
+    // Where the change came from (IP, browser, location); empty for CLI scripts and cron.
+    const src = currentSource();
     await db.run(
-      'INSERT INTO pm_activity (user_id, username, action, entity, entity_id, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [user?.id ?? null, user?.username ?? 'system', action, entity ?? null, entityId == null ? null : String(entityId), String(summary ?? '').slice(0, 300), nowIso()]
+      `INSERT INTO pm_activity (user_id, username, action, entity, entity_id, summary, ip, user_agent, location, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        user?.id ?? null, user?.username ?? 'system', action, entity ?? null, entityId == null ? null : String(entityId), String(summary ?? '').slice(0, 300),
+        src?.ip || null, src?.user_agent || null, src?.location || null, nowIso(),
+      ]
     );
   } catch (err) {
     console.error('[activity] failed to log', err.message);

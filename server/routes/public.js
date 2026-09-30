@@ -7,6 +7,7 @@
  * 'none'), so portfolios embedded before API keys existed keep working. Legacy Django paths
  * (/api/portfolio/, /api/messages/send/, /api/testimonials/submit/, ...) keep working unchanged.
  */
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
@@ -19,12 +20,13 @@ import { rateLimit } from '../lib/rateLimit.js';
 import { HttpError, isEmail, isSafeUrl } from '../lib/validate.js';
 import { buildBundle } from '../services/bundle.js';
 import { getSetting } from '../services/settings.js';
-import { checkLimit, consumeAndRun, normalizeEmail, normalizeIp } from '../services/limits.js';
+import { checkLimit, consumeAndRun, ipListed, normalizeEmail, normalizeIp } from '../services/limits.js';
 import { createItem } from '../services/collections.js';
 import { decodeDataUri, storeMedia } from '../services/media.js';
 import { collectEvent } from '../services/analytics.js';
 import { notify } from '../services/notify.js';
 import { resolveApiKey } from '../services/apikeys.js';
+import { requestSource } from '../lib/requestContext.js';
 
 const router = express.Router();
 router.use(publicCors);
@@ -76,10 +78,9 @@ function sendLimited(res, verdict) {
 
 function isBlocked(settings, email, ip) {
   const e = email ? normalizeEmail(email) : '';
-  const nip = normalizeIp(ip);
   return (
     settings.blocked_emails.some((b) => b && (normalizeEmail(b) === e || (b.startsWith('@') && e.endsWith(b.toLowerCase())))) ||
-    settings.blocked_ips.some((b) => b && (b === ip || b === nip))
+    ipListed(settings.blocked_ips, ip)
   );
 }
 
@@ -137,24 +138,57 @@ router.get(['/media/:id/:hash/:name', '/media/:id{/:name}'], ah(async (req, res)
   res.send(db.toBuffer(row.data));
 }));
 
+/**
+ * Send one of the account's media files as a download. Blocked IPs (Spam & limits) get a 403.
+ * `?inline=1` opens it in the browser instead (e.g. a PDF preview).
+ */
+async function sendDownload(req, res, mediaId, filename) {
+  const uid = req.site.id;
+  if (ipListed((await getSetting(uid, 'submissions')).blocked_ips, clientIp(req))) throw new HttpError(403, 'This file is not available.');
+  const row = await db.one('SELECT filename, mime, data, sha256 FROM pm_media WHERE id = ? AND user_id = ?', [mediaId, uid]);
+  if (!row) throw new HttpError(404, 'File not found');
+  const ext = path.extname(row.filename || '');
+  let name = String(filename || row.filename || 'file').replace(/[^\w.\- ]+/g, '').trim() || 'file';
+  if (ext && !name.toLowerCase().endsWith(ext.toLowerCase())) name += ext;
+  const inline = ['1', 'true', 'yes'].includes(String(req.query.inline || '').toLowerCase());
+  // The ETag covers the headers too, so renaming the download is not hidden by a 304.
+  const etag = `"${crypto.createHash('sha1').update(`${row.sha256}|${name}|${inline}`).digest('base64url')}"`;
+  res.set({
+    'Content-Type': row.mime,
+    // Revalidate every time (a cheap 304 via the ETag), so a swapped file or a blocked IP
+    // takes effect immediately instead of after a cache lifetime.
+    'Cache-Control': 'no-cache',
+    ETag: etag,
+    'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename="${name}"`,
+    'X-Content-Type-Options': 'nosniff',
+  });
+  // (No CSP sandbox for PDFs: it stops Chrome's built-in viewer from rendering them inline.)
+  if (row.mime !== 'application/pdf') res.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+  if (req.get('if-none-match') === etag) return res.status(304).end();
+  res.send(db.toBuffer(row.data));
+}
+
+const findDownload = async (uid, slug) =>
+  (await getSetting(uid, 'downloads')).links.find((l) => l.slug === String(slug).toLowerCase() && l.media_id);
+
+// Named download links chosen in the admin (Library → Downloads): /api/download/<slug>.
+router.get(['/download/:slug', '/downloads/:slug', '/files/:slug'], site, ah(async (req, res) => {
+  const link = await findDownload(req.site.id, req.params.slug);
+  if (!link) throw new HttpError(404, 'No file is linked to this download.');
+  await sendDownload(req, res, link.media_id, link.filename);
+}));
+
+// The download link named `resume` wins; otherwise the resume uploaded on the Profile page.
 router.get('/resume', site, ah(async (req, res) => {
   const uid = req.site.id;
+  const link = await findDownload(uid, 'resume');
+  if (link) return sendDownload(req, res, link.media_id, link.filename);
   const profile = await getSetting(uid, 'profile');
   if (!profile.resume_id) {
     if (profile.resume_url && /^https?:\/\//i.test(profile.resume_url)) return res.redirect(302, profile.resume_url);
     throw new HttpError(404, 'No resume uploaded yet');
   }
-  const row = await db.one('SELECT mime, data, sha256 FROM pm_media WHERE id = ? AND user_id = ?', [profile.resume_id, uid]);
-  if (!row) throw new HttpError(404, 'Resume not found');
-  const filename = (profile.resume_filename || 'Resume.pdf').replace(/[^\w.\- ]+/g, '');
-  res.set({
-    'Content-Type': row.mime,
-    'Cache-Control': 'public, max-age=300',
-    ETag: `"${row.sha256}"`,
-    'Content-Disposition': `${req.query.inline ? 'inline' : 'attachment'}; filename="${filename}"`,
-    'X-Content-Type-Options': 'nosniff',
-  });
-  res.send(db.toBuffer(row.data));
+  await sendDownload(req, res, profile.resume_id, profile.resume_filename || 'Resume.pdf');
 }));
 
 // ---------------------------------------------------------------- contact messages
@@ -298,7 +332,8 @@ router.post(
         throw new HttpError(400, 'Malformed JSON body.');
       }
     }
-    await collectEvent(req.site.id, payload || {}, { ip: clientIp(req), userAgent: req.get('user-agent') });
+    const src = requestSource(req);
+    await collectEvent(req.site.id, payload || {}, { ip: src.ip, userAgent: src.user_agent, country: src.country, location: src.location, origin: src.origin });
     res.status(202).json({ status: 'success' });
   })
 );

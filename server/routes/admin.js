@@ -15,8 +15,8 @@ import {
 } from '../services/collections.js';
 import { SETTINGS, bumpContentVersion, getAllSettings, getSetting, setSetting, settingsMediaRefs } from '../services/settings.js';
 import { decodeDataUri, mediaPath, storageInfo, storeMedia } from '../services/media.js';
-import { purgeAnalytics, summary } from '../services/analytics.js';
-import { clearEntries, listToday } from '../services/limits.js';
+import { purgeAnalytics, recentVisitors, summary } from '../services/analytics.js';
+import { clearEntries, listToday, normalizeIp } from '../services/limits.js';
 import { createApiKey, deleteApiKey, listApiKeys, renameApiKey, rollApiKey } from '../services/apikeys.js';
 
 // Everything here works on the signed-in account's own portfolio: `uid(req)` scopes every query.
@@ -48,6 +48,7 @@ router.get('/overview', ah(async (req, res) => {
   const recentMessages = await db.all('SELECT id, name, email, subject, is_read, created_at FROM pm_messages WHERE user_id = ? AND is_archived = 0 ORDER BY created_at DESC LIMIT 5', [u]);
   const pendingTestimonials = await db.all("SELECT id, name, role, company, content, created_at FROM pm_testimonials WHERE user_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 5", [u]);
   const profile = await getSetting(u, 'profile');
+  const downloads = await getSetting(u, 'downloads');
   const keys = await listApiKeys(u);
   const stats = await summary(u, Number(req.query.days) || 14);
   res.json({
@@ -61,7 +62,7 @@ router.get('/overview', ah(async (req, res) => {
       photo: Boolean(profile.photo_id),
       summary: Boolean(profile.summary),
       contacts: counts.contacts > 0,
-      resume: Boolean(profile.resume_id || profile.resume_url),
+      resume: Boolean(profile.resume_id || profile.resume_url || downloads.links.some((l) => l.slug === 'resume' && l.media_id)),
       projects: counts.projects > 0,
       experience: counts.experience > 0,
       skills: counts.skills > 0,
@@ -79,6 +80,10 @@ router.get('/badges', ah(async (req, res) => {
 
 router.get('/analytics', ah(async (req, res) => {
   res.json(await summary(uid(req), Number(req.query.days) || 30));
+}));
+
+router.get('/analytics/visitors', ah(async (req, res) => {
+  res.json({ items: await recentVisitors(uid(req), { days: Number(req.query.days) || 30, limit: Number(req.query.limit) || 100, ip: String(req.query.ip || '') }) });
 }));
 
 router.post('/analytics/purge', json, ah(async (req, res) => {
@@ -204,7 +209,8 @@ async function mediaUsage(u) {
     const rows = await db.all(`SELECT id, ${fields.join(', ')} FROM ${s.table} WHERE user_id = ?`, [u]);
     for (const r of rows) for (const fld of fields) add(Number(r[fld]), `${s.label} #${r.id}`);
   }
-  for (const ref of await settingsMediaRefs(u)) add(ref.id, `Settings: ${ref.where}`);
+  for (const ref of await settingsMediaRefs(u)) if (!ref.where.startsWith('downloads.')) add(ref.id, `Settings: ${ref.where}`);
+  for (const l of (await getSetting(u, 'downloads')).links) add(l.media_id, `Download /api/download/${l.slug}`);
   for (const r of await db.all('SELECT id, group_key, key, type, value, schema FROM pm_custom_content WHERE user_id = ?', [u])) {
     const row = rowToJson(resources.custom_content, r);
     for (const id of customMediaIds(row)) add(id, `Custom content ${row.group_key}.${row.key}`);
@@ -293,6 +299,27 @@ router.delete('/limits', ah(async (req, res) => {
   res.json({ status: 'success', removed });
 }));
 
+// ------------------------------------------------------------------ IP restrictions
+// Blocked IPs (Spam & limits → blocked_ips) cannot send messages or testimonials, cannot use
+// download links, and are left out of analytics. IPv6 addresses are blocked by their /64.
+
+router.get('/ip-rules', ah(async (req, res) => {
+  res.json({ blocked: (await getSetting(uid(req), 'submissions')).blocked_ips });
+}));
+
+router.post('/ip-rules', json, ah(async (req, res) => {
+  const raw = String(req.body?.ip || '').trim();
+  const ip = normalizeIp(raw);
+  if (!raw || ip === 'unknown' || !/^[0-9a-f.:/]+$/i.test(ip)) throw new HttpError(400, 'Enter a valid IP address.');
+  const block = req.body?.action !== 'unblock';
+  const current = (await getSetting(uid(req), 'submissions')).blocked_ips;
+  const rest = current.filter((x) => x !== ip && x !== raw);
+  const blocked = block ? [...rest, ip] : rest;
+  await setSetting(uid(req), 'submissions', { blocked_ips: blocked });
+  await logActivity(req.user, block ? 'block' : 'unblock', 'ip', null, ip);
+  res.json({ status: 'success', ip, blocked });
+}));
+
 // ------------------------------------------------------------------ activity
 
 router.get('/activity', ah(async (req, res) => {
@@ -317,6 +344,7 @@ router.get('/integration', ah(async (req, res) => {
       testimonial: `${base}/api/testimonials/submit`,
       analytics: `${base}/api/analytics/collect`,
       resume: `${base}/api/resume`,
+      download: `${base}/api/download/<slug>`,
     },
   });
 }));

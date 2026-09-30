@@ -451,6 +451,9 @@ input:focus, textarea:focus, select:focus {
 .event-list li:last-child { border-bottom: 0; }
 .event-type { font-weight: 600; text-transform: capitalize; }
 .event-list li > :nth-child(3) { grid-column: 2; grid-row: 1; }
+.event-list li > :nth-child(4) { justify-self: end; }
+.ip-address { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; white-space: nowrap; }
+.ip-address .icon-btn { width: 24px; height: 24px; }
 
 /* ------------------------------------------------------------------ charts */
 .chart { position: relative; }
@@ -680,3 +683,10 @@ input:focus, textarea:focus, select:focus {
   .kv, .message-meta dl { grid-template-columns: minmax(0, 1fr); }
   .page-header h1 { font-size: 20px; }
 }
+
+/* ------------------------------------------------------------------ downloads */
+.download-list { display: flex; flex-direction: column; gap: 12px; margin-bottom: 12px; }
+.download-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.download-path { font-size: 13px; word-break: break-all; }
+.download-mini { list-style: none; padding: 0; margin: 0 0 8px; display: flex; flex-direction: column; gap: 4px; }
+.download-mini li { display: flex; align-items: center; gap: 6px; font-size: 13px; }

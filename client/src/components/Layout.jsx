@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
-  Activity, Award, BarChart3, Blocks, Briefcase, Code2, Contact, Database, FolderKanban, GraduationCap, Image, LayoutDashboard,
+  Activity, Award, BarChart3, Blocks, Briefcase, Code2, Contact, Database, FileDown, FolderKanban, GraduationCap, Image, LayoutDashboard,
   LogOut, Mail, Menu, MessageSquareQuote, Moon, Plug, Search, Settings2, ShieldAlert, StickyNote, Sun, UserRound, Users, X,
 } from 'lucide-react';
 import { api } from '../lib/api.js';
@@ -32,6 +32,7 @@ const NAV = [
   ] },
   { group: 'Library', items: [
     { to: '/media', label: 'Media', icon: Image },
+    { to: '/downloads', label: 'Downloads', icon: FileDown },
     { to: '/notes', label: 'Notes', icon: StickyNote },
   ] },
   { group: 'Settings', items: [

@@ -15,6 +15,7 @@ import Skills from './pages/Skills.jsx';
 import Testimonials from './pages/Testimonials.jsx';
 import Messages from './pages/Messages.jsx';
 import MediaLibrary from './pages/MediaLibrary.jsx';
+import Downloads from './pages/Downloads.jsx';
 import Notes from './pages/Notes.jsx';
 import CustomContent from './pages/CustomContent.jsx';
 import Limits from './pages/Limits.jsx';
@@ -49,6 +50,7 @@ function App() {
         <Route path="messages" element={<Messages />} />
         <Route path="limits" element={<Limits />} />
         <Route path="media" element={<MediaLibrary />} />
+        <Route path="downloads" element={<Downloads />} />
         <Route path="notes" element={<Notes />} />
         <Route path="custom" element={<CustomContent />} />
         <Route path="site" element={<SiteSettings />} />

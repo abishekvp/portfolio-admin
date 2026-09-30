@@ -138,6 +138,8 @@ const CORE_COLUMNS = {
   },
   pm_media: { user_id: 'INTEGER' },
   pm_analytics_events: { user_id: 'INTEGER' },
+  pm_visitor_sessions: { country: 'TEXT', location: 'TEXT', origin: 'TEXT' },
+  pm_activity: { ip: 'TEXT', user_agent: 'TEXT', location: 'TEXT' },
 };
 
 /** Every table holding one account's data (used to claim legacy rows and to delete an account). */

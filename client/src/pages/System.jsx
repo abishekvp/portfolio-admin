@@ -5,6 +5,7 @@ import { useAuth } from '../lib/auth.jsx';
 import { SettingsForm } from '../components/SettingsForm.jsx';
 import { Field } from '../components/Fields.jsx';
 import { Badge, Button, Card, Empty, PageHeader, Spinner, Toggle, useConfirm, useFetch, useToast } from '../components/ui.jsx';
+import { IpAddress, describeUserAgent, useIpRules } from '../components/IpAddress.jsx';
 
 export function SiteSettings() {
   return (
@@ -233,9 +234,10 @@ export function Backup() {
 
 export function ActivityLog() {
   const { data, loading } = useFetch('/api/admin/activity?limit=200');
+  const rules = useIpRules();
   return (
     <div className="page">
-      <PageHeader title="Activity log" description="Recent changes made in the admin." />
+      <PageHeader title="Activity log" description="Recent changes made in the admin, with the IP address, browser and (on Vercel) location they came from. Block an IP to restrict it on your public site." />
       <Card padded={false}>
         {loading && !data ? (
           <Spinner block />
@@ -249,6 +251,8 @@ export function ActivityLog() {
                   <th>Action</th>
                   <th>Item</th>
                   <th>Details</th>
+                  <th>IP address</th>
+                  <th>Source</th>
                 </tr>
               </thead>
               <tbody>
@@ -259,6 +263,11 @@ export function ActivityLog() {
                     <td><Badge>{a.action}</Badge></td>
                     <td className="small">{a.entity}{a.entity_id ? ` #${a.entity_id}` : ''}</td>
                     <td className="small muted">{a.summary}</td>
+                    <td className="small">{a.ip ? <IpAddress ip={a.ip} rules={rules} compact /> : <span className="muted">—</span>}</td>
+                    <td className="small" title={a.user_agent || ''}>
+                      {describeUserAgent(a.user_agent) || <span className="muted">—</span>}
+                      {a.location && <div className="muted">{a.location}</div>}
+                    </td>
                   </tr>
                 ))}
               </tbody>

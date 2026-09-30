@@ -14,6 +14,7 @@ import cookieParser from 'cookie-parser';
 import { config, ROOT_DIR } from './config.js';
 import { initDb } from './db/index.js';
 import { ah, errorHandler, notFound } from './lib/http.js';
+import { requestContextMiddleware } from './lib/requestContext.js';
 import { HttpError } from './lib/validate.js';
 import publicRoutes from './routes/public.js';
 import authRoutes, { loadUser } from './routes/auth.js';
@@ -77,6 +78,7 @@ function buildApp() {
   );
   app.use(compression());
   app.use(cookieParser());
+  app.use(requestContextMiddleware);
 
   // Vercel Cron (or any scheduler) calls this daily with `Authorization: Bearer $CRON_SECRET`.
   app.get('/api/cron/daily', ah(async (req, res) => {

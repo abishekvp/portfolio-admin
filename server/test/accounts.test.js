@@ -279,3 +279,87 @@ test('an account can delete itself (password required)', async () => {
   await client().post('/api/auth/signup', { username: 'dave', password: 'dave-password-1' });
   assert.equal((await alice.post('/api/auth/delete-account', { password: 'alice-password-1' })).status, 409);
 });
+
+async function pdfUpload(c, text) {
+  const fd = new FormData();
+  fd.append('file', new Blob([Buffer.from(`%PDF-1.4\n% ${text}\n%%EOF\n`)], { type: 'application/pdf' }), `${text}.pdf`);
+  const r = await c.post('/api/admin/media?accept=document', fd);
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  return r.data;
+}
+
+test('download links serve the file chosen in the admin, including /api/resume', async () => {
+  const oldCv = await pdfUpload(alice, 'old-cv');
+  const newCv = await pdfUpload(alice, 'new-cv');
+  const image = await pngUpload(alice, '#00ff00');
+  await alice.put('/api/admin/settings/profile', { full_name: 'Alice', resume_id: oldCv.id, resume_filename: 'Old.pdf' });
+  assert.match((await pub(`/api/resume?key=${ctx.aliceKey}`)).data, /old-cv/);
+
+  const bad = await alice.put('/api/admin/settings/downloads', { links: [{ slug: 'Bad Slug!', media_id: newCv.id }, { slug: 'x', media_id: null }] });
+  assert.equal(bad.status, 400);
+  assert.ok(bad.data.errors['links[0].slug'] && bad.data.errors['links[1].media_id']);
+  const dup = await alice.put('/api/admin/settings/downloads', { links: [{ slug: 'cv', media_id: newCv.id }, { slug: 'CV', media_id: oldCv.id }] });
+  assert.equal(dup.status, 400);
+
+  const saved = await alice.put('/api/admin/settings/downloads', {
+    links: [{ slug: 'resume', label: 'CV', media_id: newCv.id, filename: 'Alice CV' }, { slug: 'banner', media_id: image.id }],
+  });
+  assert.equal(saved.status, 200, JSON.stringify(saved.data));
+
+  // The `resume` link wins over the Profile upload.
+  const resume = await pub(`/api/resume?key=${ctx.aliceKey}`);
+  assert.equal(resume.status, 200);
+  assert.match(resume.data, /new-cv/);
+  assert.match(resume.res.headers.get('content-disposition'), /^attachment; filename="Alice CV\.pdf"$/);
+  assert.match((await pub(`/api/download/resume?key=${ctx.aliceKey}`)).data, /new-cv/);
+  const banner = await pub(`/api/download/banner?key=${ctx.aliceKey}&inline=1`);
+  assert.equal(banner.res.headers.get('content-type'), 'image/webp');
+  assert.match(banner.res.headers.get('content-disposition'), /^inline/);
+  assert.equal((await pub(`/api/download/nope?key=${ctx.aliceKey}`)).status, 404);
+  const erin = client();
+  await erin.post('/api/auth/signup', { username: 'erin', password: 'erin-password-1' });
+  ctx.erin = erin;
+  ctx.erinKey = (await erin.get('/api/admin/keys')).data.items[0].token;
+  assert.equal((await pub(`/api/download/banner?key=${ctx.erinKey}`)).status, 404);
+
+  const bundle = (await pub(`/api/portfolio?key=${ctx.aliceKey}`)).data.data;
+  assert.match(bundle.downloads.resume.url, /\/api\/download\/resume\?key=pk_/);
+  assert.equal(bundle.downloads.resume.filename, 'Alice CV');
+  assert.equal(bundle.downloads.banner.mime, 'image/webp');
+  assert.match(bundle.profile.resume_url, /\/api\/resume\?key=pk_/);
+
+  const used = (await alice.get('/api/admin/media')).data.items.find((m) => m.id === newCv.id).used_by;
+  assert.deepEqual(used, ['Download /api/download/resume']);
+
+  // Another account cannot link Alice's file.
+  assert.equal((await erin.put('/api/admin/settings/downloads', { links: [{ slug: 'stolen', media_id: newCv.id }] })).status, 200);
+  assert.equal((await pub(`/api/download/stolen?key=${ctx.erinKey}`)).status, 404);
+});
+
+test('blocked IPs lose downloads and analytics; the activity log records the source', async () => {
+  const blocked = await alice.post('/api/admin/ip-rules', { ip: '::ffff:127.0.0.1' });
+  assert.equal(blocked.status, 200, JSON.stringify(blocked.data));
+  assert.deepEqual((await alice.get('/api/admin/ip-rules')).data.blocked, ['127.0.0.1']);
+  assert.equal((await pub(`/api/download/banner?key=${ctx.aliceKey}`)).status, 403);
+
+  const collect = (session_id) =>
+    pub(`/api/analytics/collect?key=${ctx.aliceKey}`, { method: 'POST', headers: { 'Content-Type': 'text/plain', 'User-Agent': 'Mozilla/5.0 Firefox/120' }, body: JSON.stringify({ event_type: 'pageview', session_id, path: '/' }) });
+  await collect('blocked-visitor');
+  let visitors = (await alice.get('/api/admin/analytics/visitors')).data.items;
+  assert.ok(!visitors.some((v) => v.session_id === 'blocked-visitor'));
+
+  assert.equal((await alice.post('/api/admin/ip-rules', { ip: '127.0.0.1', action: 'unblock' })).data.blocked.length, 0);
+  assert.equal((await pub(`/api/download/banner?key=${ctx.aliceKey}`)).status, 200);
+  await collect('allowed-visitor');
+  visitors = (await alice.get('/api/admin/analytics/visitors?ip=127.0.0.1')).data.items;
+  const v = visitors.find((x) => x.session_id === 'allowed-visitor');
+  assert.equal(v.ip, '127.0.0.1');
+  assert.equal(v.browser, 'Firefox');
+  assert.equal(v.pageviews, 1);
+  assert.equal((await ctx.erin.get('/api/admin/analytics/visitors')).data.items.filter((x) => x.session_id === 'allowed-visitor').length, 0);
+
+  assert.equal((await alice.post('/api/admin/ip-rules', { ip: 'not an ip' })).status, 400);
+  const log = (await alice.get('/api/admin/activity')).data.items.find((a) => a.action === 'unblock');
+  assert.match(log.ip, /127\.0\.0\.1/);
+  assert.equal(log.summary, '127.0.0.1');
+});

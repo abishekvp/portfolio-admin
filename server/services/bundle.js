@@ -4,7 +4,8 @@
  * {
  *   version, generated_at,
  *   data: { profile, contacts, experience, education, skills, skill_categories, projects,
- *           achievements, testimonials, custom: { <group>: { <key>: value } }, seo },
+ *           achievements, testimonials, custom: { <group>: { <key>: value } }, seo,
+ *           downloads: { <slug>: { label, url, filename, mime, size } } },
  *   media: { "<absolute media url>": "data:<mime>;base64,..." }   // only with ?inline=1
  * }
  *
@@ -126,11 +127,27 @@ export async function buildBundle({ uid, baseUrl, inline = false, apiKey = '' })
     .map((c) => ({ ...c, skills: collections.skills.filter((s) => s.category === c.name) }))
     .filter((c) => c.skills.length);
 
+  // Download links (slug -> chosen file), always through the stable /api/download/<slug> URL.
+  const keyQuery = apiKey ? `?key=${encodeURIComponent(apiKey)}` : '';
+  const links = settings.downloads.links.filter((l) => l.slug && l.media_id);
+  const linkMeta = await getMediaMeta(uid, links.map((l) => l.media_id));
+  const downloads = {};
+  for (const l of links) {
+    const m = linkMeta.get(l.media_id);
+    if (!m) continue;
+    downloads[l.slug] = {
+      label: l.label,
+      url: `${base}/api/download/${encodeURIComponent(l.slug)}${keyQuery}`,
+      filename: l.filename || m.filename,
+      mime: m.mime,
+      size: Number(m.size),
+    };
+  }
+
   const profile = attachUrls(settings.profile, urlOf);
-  // Stable resume link: the uploaded PDF, otherwise the external URL.
-  profile.resume_url = settings.profile.resume_id
-    ? `${base}/api/resume${apiKey ? `?key=${encodeURIComponent(apiKey)}` : ''}`
-    : settings.profile.resume_url;
+  // Stable resume link: the `resume` download link or the uploaded PDF, otherwise the external URL.
+  profile.resume_url = downloads.resume || settings.profile.resume_id ? `${base}/api/resume${keyQuery}` : settings.profile.resume_url;
+  if (downloads.resume?.filename) profile.resume_filename = downloads.resume.filename;
 
   const data = {
     profile,
@@ -138,6 +155,7 @@ export async function buildBundle({ uid, baseUrl, inline = false, apiKey = '' })
     skill_categories: skillCategories,
     custom: buildCustom(customRows, urlOf),
     seo: attachUrls(settings.seo, urlOf),
+    downloads,
   };
 
   let media = null;

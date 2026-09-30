@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { Archive, ArchiveRestore, ArrowLeft, Copy, Mail, MailOpen, Reply, Star, Trash2 } from 'lucide-react';
 import { api, copyText, formatDate, timeAgo } from '../lib/api.js';
 import { Button, Empty, IconButton, PageHeader, SearchInput, Spinner, Tabs, cx, useConfirm, useFetch, useToast } from '../components/ui.jsx';
+import { IpAddress, useIpRules } from '../components/IpAddress.jsx';
 
 const FILTERS = {
   inbox: 'is_archived=0',
@@ -18,6 +19,7 @@ export default function Messages() {
   const [page, setPage] = useState(1);
   const selectedId = Number(params.get('id')) || null;
   const toast = useToast();
+  const rules = useIpRules();
   const confirm = useConfirm();
 
   const list = useFetch(`/api/admin/c/messages?${FILTERS[filter]}&page=${page}&limit=30${q ? `&q=${encodeURIComponent(q)}` : ''}`);
@@ -171,7 +173,7 @@ export default function Messages() {
               <details className="message-meta">
                 <summary>Technical details</summary>
                 <dl>
-                  <dt>IP</dt><dd>{message.ip || '—'}</dd>
+                  <dt>IP</dt><dd><IpAddress ip={message.ip} rules={rules} /></dd>
                   <dt>Browser</dt><dd>{message.user_agent || '—'}</dd>
                   <dt>Visitor session</dt><dd>{message.session_id || '—'}</dd>
                 </dl>
