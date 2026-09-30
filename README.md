@@ -101,4 +101,4 @@ Contact messages and testimonials are each limited per day, **per email and per 
 | GET | `/api/cron/daily` | Maintenance (Bearer `CRON_SECRET`) |
 | * | `/api/auth/*`, `/api/admin/*` | Admin API (session cookie + `X-Requested-With: portfolio-admin`) |
 
-Session length is configurable in **Account → Security** (1–365 days). `SESSION_DAYS` is only the initial default.
+Session length is managed in **Account → Security** (1–365 days, default 14).

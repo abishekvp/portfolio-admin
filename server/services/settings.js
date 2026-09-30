@@ -59,8 +59,8 @@ export const SETTINGS = {
     label: 'Security',
     public: false,
     template: { session_days: 0 },
-    // SESSION_DAYS env var is only the initial default; the admin UI can change it.
-    defaults: { session_days: Number(process.env.SESSION_DAYS) || 14 },
+    // Managed only from Account → Security in the admin UI.
+    defaults: { session_days: 14 },
   },
   analytics: {
     label: 'Analytics',
