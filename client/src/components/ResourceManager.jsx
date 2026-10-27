@@ -122,7 +122,7 @@ export function ResourceManager({ resource, schema, headerExtra, fieldOverrides 
           <div key={g.key ?? 'all'} className="item-group">
             {g.key && (
               <h3 className="group-title">
-                {g.key} <span className="muted">({g.items.length})</span>
+                {schema.groupLabel ? schema.groupLabel(g.key) : g.key} <span className="muted">({g.items.length})</span>
               </h3>
             )}
             <ul className="item-list">

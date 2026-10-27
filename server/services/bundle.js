@@ -4,7 +4,8 @@
  * {
  *   version, generated_at,
  *   data: { profile, contacts, experience, education, skills, skill_categories, projects,
- *           achievements, testimonials, custom: { <group>: { <key>: value } }, seo,
+ *           mentorship, events, achievements, testimonials,
+ *           custom: { <group>: { <key>: value } }, seo,
  *           downloads: { <slug>: { label, url, filename, mime, size } } },
  *   media: { "<absolute media url>": "data:<mime>;base64,..." }   // only with ?inline=1
  * }
@@ -26,7 +27,18 @@ const PUBLIC_OMIT = {
   testimonials: ['email', 'ip', 'session_id', 'admin_notes', 'status', 'source'],
   custom_content: ['help'],
 };
-const PUBLIC_COLLECTIONS = ['contacts', 'experience', 'education', 'skills', 'projects', 'achievements', 'testimonials', 'custom_content'];
+const PUBLIC_COLLECTIONS = [
+  'contacts',
+  'experience',
+  'education',
+  'skills',
+  'projects',
+  'mentorship',
+  'events',
+  'achievements',
+  'testimonials',
+  'custom_content',
+];
 
 // Keyed by content version, which is read from the database on every request, so a
 // cached entry is never stale even with several serverless instances.

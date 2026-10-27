@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
-  Activity, Award, BarChart3, Blocks, Briefcase, Code2, Contact, Database, FileDown, FolderKanban, GraduationCap, Image, LayoutDashboard,
-  LogOut, Mail, Menu, MessageSquareQuote, Moon, Plug, Search, Settings2, ShieldAlert, StickyNote, Sun, UserRound, Users, X,
+  Activity, Award, BarChart3, Blocks, Briefcase, Code2, Compass, Contact, Database, FileDown, FolderKanban, GraduationCap, Image, LayoutDashboard,
+  LogOut, Mail, Menu, MessageSquareQuote, Mic, Moon, Plug, Search, Settings2, ShieldAlert, StickyNote, Sun, UserRound, Users, X,
 } from 'lucide-react';
 import { api } from '../lib/api.js';
 import { useAuth } from '../lib/auth.jsx';
@@ -16,10 +16,12 @@ const NAV = [
   { group: 'Content', items: [
     { to: '/profile', label: 'Profile', icon: UserRound },
     { to: '/contacts', label: 'Contacts', icon: Contact },
+    { to: '/projects', label: 'Projects & Sites', icon: FolderKanban },
     { to: '/experience', label: 'Experience', icon: Briefcase },
+    { to: '/mentorship', label: 'Mentorship', icon: Compass },
+    { to: '/events', label: 'Speaking & Events', icon: Mic },
     { to: '/education', label: 'Education', icon: GraduationCap },
     { to: '/skills', label: 'Skills', icon: Code2 },
-    { to: '/projects', label: 'Projects', icon: FolderKanban },
     { to: '/achievements', label: 'Achievements', icon: Award },
     { to: '/testimonials', label: 'Testimonials', icon: MessageSquareQuote, badge: 'testimonials' },
   ] },

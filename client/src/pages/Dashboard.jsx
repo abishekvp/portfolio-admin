@@ -121,15 +121,17 @@ export default function Dashboard() {
 
       <div className="count-strip">
         {[
+          ['Projects & Sites', counts.projects, '/projects'],
           ['Experience', counts.experience, '/experience'],
-          ['Projects', counts.projects, '/projects'],
+          ['Mentorship', counts.mentorship, '/mentorship'],
+          ['Events', counts.events, '/events'],
           ['Skills', counts.skills, '/skills'],
           ['Achievements', counts.achievements, '/achievements'],
           ['Testimonials', counts.testimonials, '/testimonials'],
           ['Custom fields', counts.custom_content, '/custom'],
         ].map(([label, n, to]) => (
           <Link key={label} to={to} className="count-chip">
-            <strong>{n}</strong>
+            <strong>{n ?? 0}</strong>
             <span>{label}</span>
           </Link>
         ))}

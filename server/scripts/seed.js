@@ -2,7 +2,7 @@
  * Populate an empty database with the current portfolio content.
  *   npm run seed            -> only seeds collections/settings that are still empty
  *   npm run seed -- --force -> replaces all portfolio content (messages & testimonials are kept)
- *   --avatar=<path>  --resume=<path>  optional files to import (defaults look in ../abishek)
+ *   --avatar=<path>  --resume=<path>  optional files to import (defaults look in ../abishek.in)
  *   --user=<username>  account to seed (default: the oldest account)
  */
 import fs from 'node:fs';
@@ -24,7 +24,9 @@ const args = Object.fromEntries(
   })
 );
 const force = Boolean(args.force);
-const siteDir = path.resolve(ROOT_DIR, '..', 'abishek');
+const siteDir = fs.existsSync(path.resolve(ROOT_DIR, '..', 'abishek.in'))
+  ? path.resolve(ROOT_DIR, '..', 'abishek.in')
+  : path.resolve(ROOT_DIR, '..', 'abishek');
 
 await initDb();
 const { id: uid } = await targetAccount(args.user);
@@ -33,14 +35,30 @@ async function isEmpty(table) {
   return Number((await db.one(`SELECT COUNT(*) AS n FROM ${table} WHERE user_id = ?`, [uid])).n) === 0;
 }
 
-for (const name of ['contacts', 'experience', 'skills', 'projects', 'achievements']) {
+async function importFile(filePath, opts) {
+  if (!filePath || !fs.existsSync(filePath)) return null;
+  const media = await storeMedia(uid, fs.readFileSync(filePath), { filename: path.basename(filePath), ...opts });
+  return media.id;
+}
+
+for (const name of ['contacts', 'experience', 'education', 'skills', 'projects', 'mentorship', 'events', 'achievements']) {
   const spec = resources[name];
+  if (!spec || !content[name]) continue;
   if (force) await db.run(`DELETE FROM ${spec.table} WHERE user_id = ?`, [uid]);
   if (!(await isEmpty(spec.table))) {
     console.log(`- ${name}: already has data, skipped`);
     continue;
   }
-  for (const item of content[name]) await createItem(uid, spec, item);
+  for (const raw of content[name]) {
+    const item = { ...raw };
+    if (item._image_file) {
+      const imgPath = path.join(siteDir, 'src', 'assets', 'img', 'events', item._image_file);
+      const imageId = await importFile(imgPath, { accept: 'image', alt: item.title });
+      if (imageId) item.image_id = imageId;
+      delete item._image_file;
+    }
+    await createItem(uid, spec, item);
+  }
   console.log(`✓ ${name}: ${content[name].length} items`);
 }
 
@@ -52,12 +70,6 @@ for (const [key, value] of Object.entries(content.settings)) {
   }
   await setSetting(uid, key, value, { partial: true });
   console.log(`✓ settings.${key}`);
-}
-
-async function importFile(filePath, opts) {
-  if (!filePath || !fs.existsSync(filePath)) return null;
-  const media = await storeMedia(uid, fs.readFileSync(filePath), { filename: path.basename(filePath), ...opts });
-  return media.id;
 }
 
 const profile = await getSetting(uid, 'profile');
@@ -76,6 +88,9 @@ if (!profile.resume_id || force) {
   }
 }
 
+if (force) {
+  await db.run('DELETE FROM pm_custom_content WHERE user_id = ?', [uid]);
+}
 const preset = await applyCustomPreset(uid, 'abishek-portfolio', { overwrite: force });
 console.log(`✓ custom content preset: ${preset.added} added, ${preset.updated} updated`);
 

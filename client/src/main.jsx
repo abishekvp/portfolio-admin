@@ -42,7 +42,7 @@ function App() {
         <Route index element={<Dashboard />} />
         <Route path="analytics" element={<Analytics />} />
         <Route path="profile" element={<SimplePage settingKey="profile" title="Profile" description="Your personal details and about summary. How they look is decided by the portfolio's design." />} />
-        {['contacts', 'experience', 'education', 'projects', 'achievements'].map((r) => (
+        {['contacts', 'experience', 'education', 'projects', 'mentorship', 'events', 'achievements'].map((r) => (
           <Route key={r} path={r} element={<ResourceManager key={r} resource={r} schema={collections[r]} />} />
         ))}
         <Route path="skills" element={<Skills />} />
